@@ -1,0 +1,31 @@
+name: astrbot_plugin_twitter
+display_name: 推特解析（astr-twitter）
+short_desc: 自动解析 X/Twitter 链接，直发视频、图片与 GIF
+desc: |
+  自动识别聊天里的 X / Twitter 链接并解析成可发送的媒体。
+
+  支持内容：视频（多清晰度自动取 720p）、图片（单图/多图）、GIF。
+  发送方式：视频 / 图片直接发到会话；消息里带链接时自动触发，也可用 `/解析 <链接>` 手动触发。
+
+  指令：
+    /解析 <链接>      手动解析（别名 /推特解析 /tw /x解析）
+    /开启解析         开启当前会话的自动解析（管理员）
+    /关闭解析         关闭当前会话的自动解析（管理员）
+    /解析状态         查看插件与本会话状态
+
+  也提供 LLM Tool `parse_twitter_link`，可让模型在对话中按需调用。
+version: 1.0.0
+author: huliaiya
+repo: https://github.com/huliaiya/astr-twitter
+astrbot_version: ">=4.9.2"
+support_platforms:
+  - aiocqhttp
+  - telegram
+  - discord
+  - lark
+  - slack
+  - kook
+  - satori
+  - misskey
+  - matrix
+  - mattermost

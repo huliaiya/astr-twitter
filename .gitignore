@@ -1,6 +1,16 @@
-# 测试下载产物（不入库）
+# 测试与构建产物（不入库）
 downloads/
 demo-out/
+media/
 node_modules/
+
+# Python
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.venv/
+venv/
+
 *.log
 .DS_Store
+data/

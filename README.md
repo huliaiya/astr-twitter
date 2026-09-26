@@ -1,125 +1,153 @@
-# twitter-parser（独立版推特解析器）
+# astr-twitter · AstrBot 推特解析插件
 
-从 [`Zhalslar/astrbot_plugin_parser`](https://github.com/Zhalslar/astrbot_plugin_parser) 的
-`core/parsers/twitter.py` 中**单独抽出来的推特解析器**，去掉了 AstrBot 的全部依赖
-（`BaseParser` / `PluginConfig` / `Downloader` / `CookieJar`），可以脱离 AstrBot 独立运行。
+[![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.9.2-orange)](https://github.com/AstrBotDevs/AstrBot)
+[![License](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
+
+在 AstrBot 里自动解析 **X / Twitter** 链接，把推文里的**视频、图片、GIF**直接发到会话。
+
+消息里出现 `x.com/.../status/...` 或 `twitter.com/.../status/...` 就会自动触发，也可以手动 `/解析 <链接>`。
+解析与发送逻辑抽取自 [`Zhalslar/astrbot_plugin_parser`](https://github.com/Zhalslar/astrbot_plugin_parser)
+的 `core/parsers/twitter.py`，去掉了对 AstrBot 的硬耦合后重新组织为独立插件。
+
+---
+
+## ✨ 功能
+
+- **自动解析**：消息（含卡片/Json 组件）里的推特链接自动解析并发送媒体
+- **手动解析**：`/解析 <链接>`，别名 `/推特解析`、`/tw`、`/x解析`
+- **视频 / 图片 / GIF**：视频多清晰度自动取第一个（720p）；GIF 以 mp4 形式发送
+- **会话开关**：管理员可用 `/开启解析`、`/关闭解析` 按会话控制，持久化保存
+- **防抖**：同一条推文在窗口期内只解析一次，避免刷屏
+- **LLM Tool**：注册 `parse_twitter_link`，模型可在对话中按需调用
+- **可配置**：接口地址、Cookie、代理、超时、重试、媒体数量/大小上限等都在 WebUI 配置面板里
+
+## 📦 安装
+
+**方式一：AstrBot 插件市场 / 仓库安装**
+
+在 WebUI 的「插件」页安装本仓库：
 
 ```
-twitter-parser/
-├─ twitter-parser.mjs            # 主实现（Node.js，零依赖，已实测）
-├─ test-twitter.mjs              # 自测：URL 匹配 + 离线 HTML 解析 + 真实接口 + 真实下载
-├─ twitter_parser_standalone.py  # 等价的 Python 版（aiohttp + bs4，本机无 Python 未执行）
-├─ fixtures/                     # 离线回归用 xdown 返回 HTML 快照
-└─ downloads/ demo-out/          # 测试实际下载下来的媒体
+https://github.com/huliaiya/astr-twitter
 ```
 
-## 原插件的解析链路（已 1:1 复刻）
+**方式二：手动 clone**
 
-| 原插件代码 | 作用 | 本实现 |
+```bash
+cd AstrBot/data/plugins
+git clone https://github.com/huliaiya/astr-twitter
+```
+
+AstrBot 会按 `metadata.yaml` 里的 `name`（`astrbot_plugin_twitter`）作为插件目录名与 import 路径，
+仓库目录名带连字符 `astr-twitter` 不影响加载。安装后在插件页点「重载插件」即可。
+
+依赖只有 `beautifulsoup4`（见 `requirements.txt`），`aiohttp` 由 AstrBot 本体提供。
+
+## 🗂 目录结构
+
+```
+astr-twitter/
+├─ main.py                # 插件入口：Star 子类、事件监听、指令、LLM Tool
+├─ metadata.yaml          # 插件元数据（name 必须是合法 Python 标识符）
+├─ _conf_schema.json      # WebUI 配置面板
+├─ requirements.txt       # 依赖：beautifulsoup4
+├─ core/
+│  ├─ twitter.py          # 解析核心（不依赖 AstrBot，可独立测试）
+│  └─ downloader.py       # 媒体下载 + 文件头校验
+├─ tests/                 # pytest：离线用例 + 联网用例 + 真实 AstrBot 集成测试
+└─ devtools/              # 开发工具：Python CLI、Node 版实现、离线 fixture
+```
+
+## 💬 指令
+
+| 指令 | 权限 | 说明 |
 | --- | --- | --- |
-| `@handle("x.com", regex)` / `@handle("twitter.com", regex)` | 匹配 status 链接 | `matchTweetUrl()`，正则**逐字符相同** |
-| `BaseParser.search_url()` | 关键词 + 正则双匹配 | `matchTweetUrl()` 里的 `keyword not in text` 短路 |
-| `TwitterParser.__init__` | 设置 `Origin/Referer: xdown.app` 等请求头 | `XDOWN_HEADERS` |
-| `_req_xdown_api()` | `POST https://xdown.app/api/ajaxSearch`，`q=<url>&lang=zh-cn` | `reqXdownApi()`（加了重试） |
-| `parse_twitter_html()` | bs4 抽 封面/视频/图片/gif/标题 | `parseXdownHtml()`（正则实现，语义对齐） |
-| `create_video_content / create_image_contents / create_dynamic_contents` | 构造内容 | `contents[]`，顺序：视频 → 图片 → gif |
-| `self.result(...)` | 统一 ParseResult | `parseTweet()` 返回值 |
-| `Downloader.download_*` | 下载媒体 | `downloadMedia()`（含文件头校验） |
+| `/解析 <链接>` | 所有人 | 手动解析（别名：`/推特解析`、`/tw`、`/x解析`） |
+| `/开启解析` | 管理员 | 开启当前会话的自动解析 |
+| `/关闭解析` | 管理员 | 关闭当前会话的自动解析 |
+| `/解析状态` | 所有人 | 查看插件与本会话状态 |
 
-### 关键细节（保持与原插件一致）
+## ⚙️ 配置（WebUI → 插件 → 推特解析）
 
-- 请求头必须带 `Origin`/`Referer: https://xdown.app`，否则接口会拒。
-- 视频有 720p/360p/270p 多个清晰度，原插件遇到**第一个**「下载 MP4」就 `break` → 实际取 720p，本实现同样 break。
-- gif 走 `下载 gif` 分支 → 最终是 **mp4 容器**（不是 .gif 文件）。
-- 图片推文的下载按钮 class 是 `abutton`；视频/gif 推文是 `tw-button-dl`，两者都要扫（原插件用 `chain()`，本实现先 tw-button-dl 后 abutton，顺序一致）。
-- 封面 = 返回 HTML 里**第一个 `<img>`**；作者名原插件就是硬编码 `"无用户名"`。
-- gif 推文里那条「下载图片」是缩略图，原插件也会当成一张图片加入内容，本实现保留。
-- 接口返回 `status != "ok"` → `ParseException(接口 msg)`；`status == "ok"` 但 `data` 为空 → `ParseException("解析失败, 数据为空")`（与原插件行为相同）。
+| 配置项 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 插件总开关 |
+| `auto_parse` | `true` | 自动解析消息中的链接 |
+| `interrupt_event` | `true` | 解析后终止事件传播，避免同一条消息再触发一次 LLM 回复 |
+| `notify_error` | `false` | 失败时是否回复原因（默认只写日志，不打扰群聊） |
+| `max_links` | `3` | 单条消息最多解析链接数 |
+| `max_media` | `9` | 单条推文最多发送媒体数 |
+| `max_video_mb` | `100` | 媒体大小上限 |
+| `send_title` | `true` | 是否附带推文正文 |
+| `send_cover` | `false` | 是否额外发送封面 |
+| `keep_files` | `false` | 是否保留已下载文件（默认发送后删除） |
+| `debounce_seconds` | `300` | 同一推文防抖窗口，`0` 关闭 |
+| `api_endpoint` | `https://xdown.app/api/ajaxSearch` | 解析接口地址 |
+| `api_origin` | `https://xdown.app` | 接口 Origin/Referer（有校验，一般不改） |
+| `cookie` | 空 | 接口 Cookie（风控时使用，面板里以密码框显示） |
+| `proxy` | 空 | `http://127.0.0.1:7890` 之类，用于接口请求与媒体下载 |
+| `timeout` / `retry` | `20.0` / `2` | 接口超时与重试次数 |
 
-## 用法（Node，已实测）
+## 🔧 工作原理
+
+```
+消息事件
+  └─ 收集文本（message_str + Json 卡片 + url 字段）
+      └─ 正则匹配 status 链接（x.com / twitter.com，与原插件正则一致）
+          └─ 防抖 / 会话开关 / 机器人自身消息过滤
+              └─ POST xdown.app/api/ajaxSearch  (q=<url>&lang=zh-cn)
+                  └─ 解析返回 HTML：第一个 <img> → 封面；
+                     a.tw-button-dl / a.abutton → 视频 / 图片 / gif；第一个 <h3> → 正文
+                      └─ 下载媒体（校验文件头，落地到 data/plugin_data/<plugin>/twitter/<推文ID>/）
+                          └─ yield event.chain_result([...Video/Image...]) → 发送
+```
+
+## 🧪 测试
 
 ```bash
-# 只解析，输出 JSON
-node twitter-parser.mjs https://x.com/Fortnite/status/1870484479980052921
+# 离线（URL 匹配、HTML fixture、文件头嗅探、参数解析、卡片提取…）
+ASTR_TWITTER_SKIP_LIVE=1 pytest
 
-# 从一段消息文本里提取链接
-node twitter-parser.mjs "看这个 https://x.com/Dithmenos9/status/1966798448499286345"
-
-# 解析并真实下载全部媒体（校验文件头）
-node twitter-parser.mjs https://x.com/Fortnite/status/1904171341735178552 --download out
+# 全部（含真实接口解析、真实下载、真实 AstrBot 集成）
+pytest
 ```
 
-作为模块使用：
+本仓库的测试情况（AstrBot 4.28.1 + Python 3.12，实测）：
 
-```js
-import { parseTweet, matchTweetUrl, downloadMedia } from "./twitter-parser.mjs";
-
-if (matchTweetUrl(messageStr)) {
-  const r = await parseTweet(messageStr);
-  console.log(r.title, r.counts);                 // { video: 1, image: 0, dynamic: 0 }
-  for (const c of r.contents) await downloadMedia(c.url, "downloads");
-}
+```
+44 passed in 76.06s
 ```
 
-测试：
+- **离线**：URL 匹配 10 项（含 `www.` / `mobile.` / `x.com/i/web/status/` / 夹带参数 / 反例）、
+  3 份 xdown HTML fixture 的解析断言、文件头嗅探 6 项、配置与指令判定、卡片链接提取、
+  以及**按 AstrBot 真实导入路径 `data.plugins.astrbot_plugin_twitter.main` 加载**的保真测试。
+- **联网**：真实推文的视频 / 单图 / 多图 / GIF / `twitter.com` 域名解析；不存在的推文正确抛 `ParseException`。
+- **集成**：用真实 AstrBot 的事件与消息组件跑完整链路（消息 → 解析 → 下载 → `chain_result`），
+  断言消息链里出现 `Image` / `Video` 组件、文件真实存在且体积合理、`event.stop_event()` 被调用；
+  同时断言 6 个 handler 与 `parse_twitter_link` 这个 LLM Tool 已成功注册。
+
+命令行调试（不需要 AstrBot）：
 
 ```bash
-node test-twitter.mjs            # 全部（含联网 + 真实下载）
-node test-twitter.mjs --offline  # 只跑 URL 匹配 + 离线 HTML fixture
+python devtools/twitter_cli.py https://x.com/Fortnite/status/1870484479980052921
+python devtools/twitter_cli.py "看这个 https://x.com/Dithmenos9/status/1966798448499286345" --download out
 ```
 
-## 测试结果（本机实际跑出来）
+## ⚠️ 已知限制
 
-```
-通过 32 / 失败 0
-```
+1. **依赖第三方接口 `xdown.app`**（原插件同样依赖）。接口改版或限流时需要更新 `api_endpoint`，
+   或等待上游修复。
+2. **`pbs.twimg.com` 直链在部分服务器不可达**（封面是直链）。此时视频/图片经 `dl.snapcdn.app`
+   中转仍可正常下载，只有 `send_cover` 开封面时可能失败——日志里会有提示，不影响主流程。
+3. **GIF 以 mp4 形式发送**（接口给的就是 mp4 容器）。
+4. 暂不支持**转发推文（repost）**与**转换为 MP3**（接口有该按钮，原插件也未处理）。
+5. 视频类消息并非所有平台都能发送；失败时会降级为发送原链接。
+6. 多清晰度只取第一个 MP4（与原插件一致，通常是 720p）。
 
-- **URL 匹配**：x.com / www.x.com / twitter.com / mobile.twitter.com / `x.com/i/web/status/...` /
-  文本中夹带链接与 `?s=46&t=...` 参数 → 全部匹配；`example.com`、`notx.com`、无 `status/<id>` → 全部拒绝。
-- **离线 HTML 解析**：3 份 fixture（gif / video / photo）→ 封面、MP4、图片、gif、标题、tweet_id 抽取全部正确。
-- **真实接口解析**（用上游 nonebot-plugin-parser 测试套件里的真实推文）：
-  | 用例 | 链接 | 结果 |
-  | --- | --- | --- |
-  | 视频 | `x.com/Fortnite/status/1904171341735178552` | `{video:1}`，标题 `Don't miss the (Lucky) Landing...`，封面 OK |
-  | 单图 | `x.com/Fortnite/status/1870484479980052921` | `{image:1}` |
-  | 多图 | `x.com/chitose_yoshino/status/1841416254810378314` | `{image:3}` |
-  | GIF | `x.com/Dithmenos9/status/1966798448499286345` | `{image:1, dynamic:1}` |
-  | twitter.com 域名 | `twitter.com/Fortnite/status/1870484479980052921` | `{image:1}` |
-  | 不存在的推文 | `x.com/NASA/status/1683502034445783040` | 正确抛 `ParseException` |
-- **真实下载校验**（下载到 `downloads/`，按魔数判断类型）：
-  - 视频 `1,857,890 bytes` → `ftyp` 魔数 = **mp4** ✅
-  - 图片 `122,214 bytes` → `FF D8 FF` = **jpeg** ✅
-  - GIF `141,146 bytes` → **mp4** 容器 ✅
+## 📄 来源与致谢
 
-复现命令与原始输出：
+- 解析逻辑抽取自 [`Zhalslar/astrbot_plugin_parser`](https://github.com/Zhalslar/astrbot_plugin_parser)（MIT）
+- 该项目的核心又来自 [`fllesser/nonebot-plugin-parser`](https://github.com/fllesser/nonebot-plugin-parser)
+- 测试用的真实推文链接取自 `nonebot-plugin-parser` 的测试套件
 
-```bash
-$ node test-twitter.mjs
-...
-=== 4. 真实下载校验 ===
-  ✅ 视频可下载且是 mp4 — 1857890 bytes, kind=mp4
-  ✅ 图片可下载且是图片 — 122214 bytes, kind=jpeg
-  ✅ GIF 可下载且是视频容器 — 141146 bytes, kind=mp4
-================ 结果 ================
-通过 32 / 失败 0
-```
-
-## 已知限制 / 注意
-
-1. **依赖第三方站 `xdown.app`**（原插件也是）：接口挂了/改版了，这里就一起失效。请求头里的
-   `Origin`/`Referer` 不能删。存在限流可能，代码里加了 3 次重试 + 退避。
-2. **`pbs.twimg.com` 直链在本机被网络策略拦截**（DNS 解析到 `128.121.243.228`，curl/Node 均连接超时），
-   所以 CLI 里下载**封面**会报 `fetch failed`；而媒体经由 `dl.snapcdn.app` 中转是可下的——
-   上面 3 个下载用例证明了这一点。这不是解析器的问题，换到能直连 `pbs.twimg.com` 的机器即可。
-3. 原插件不支持转发推文（repost）与 MP3 转换（HTML 里有「转换为 MP3」按钮但没处理）；本实现保持一致。
-4. 单条推文里若有**多个视频**，原插件只取第一个 MP4（有 `break`），本实现同样只取第一个。
-5. `twitter_parser_standalone.py` 是等价 Python 版（aiohttp + beautifulsoup4，与原插件同依赖），
-   逻辑照着原文件写，但**本机没有 Python 运行时，未执行过**；已实测的是 Node 版。
-
-## 想搬回 AstrBot 插件里？
-
-- 只想用解析逻辑：把 `parseXdownHtml()` 里那套规则抄进你的 parser 即可，`@handle` 正则原样保留。
-- 想保留插件结构：把 `parseTweet()` 换成 `TwitterParser._parse()`，用 `self.create_video_content(...)`
-  / `self.create_image_contents(...)` / `self.create_dynamic_contents(...)` 构造 `contents`。
-- 想脱离 AstrBot 单独跑 Python 版：`pip install aiohttp beautifulsoup4` 后
-  `python twitter_parser_standalone.py <链接> --download out`。
+本项目以 MIT 协议发布，遵循原项目的许可与署名要求。

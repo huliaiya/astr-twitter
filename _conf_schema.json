@@ -1,0 +1,105 @@
+{
+  "enabled": {
+    "description": "插件总开关",
+    "type": "bool",
+    "default": true,
+    "hint": "关闭后插件不再响应任何消息，但指令仍然可用。"
+  },
+  "auto_parse": {
+    "description": "自动解析消息中的推特链接",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后，聊天里出现 X/Twitter 链接会自动解析并发送媒体。"
+  },
+  "interrupt_event": {
+    "description": "解析后终止事件传播",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后可避免同一条消息再走一遍 LLM 回复；如果你希望链接既解析又让 AI 回复，把它关掉。"
+  },
+  "notify_error": {
+    "description": "解析失败时提示用户",
+    "type": "bool",
+    "default": false,
+    "hint": "自动解析（非指令）失败时是否回复错误原因，例如「未找到视频」；默认只写日志，不打扰群聊。"
+  },
+  "max_links": {
+    "description": "单条消息最多解析的链接数",
+    "type": "int",
+    "default": 3,
+    "hint": "一条消息里包含多个链接时的上限。"
+  },
+  "max_media": {
+    "description": "单条推文最多发送的媒体数",
+    "type": "int",
+    "default": 9,
+    "hint": "多图推文的图片数量上限，防止一次刷屏。"
+  },
+  "max_video_mb": {
+    "description": "媒体大小上限（MB）",
+    "type": "int",
+    "default": 100,
+    "hint": "超过该大小的文件会被跳过，避免占用过多带宽与磁盘。"
+  },
+  "send_title": {
+    "description": "发送推文正文",
+    "type": "bool",
+    "default": true,
+    "hint": "把推文正文（h3 标题）作为文本一起发出。"
+  },
+  "send_cover": {
+    "description": "发送视频封面",
+    "type": "bool",
+    "default": false,
+    "hint": "额外发送一张封面图；注意封面直链是 pbs.twimg.com，部分服务器直连不通。"
+  },
+  "keep_files": {
+    "description": "保留已下载的媒体文件",
+    "type": "bool",
+    "default": false,
+    "hint": "默认发送后删除，避免插件数据目录越来越大。"
+  },
+  "debounce_seconds": {
+    "description": "同一条推文的防抖时间（秒）",
+    "type": "int",
+    "default": 300,
+    "hint": "同一链接在该时间内只会解析一次，避免刷屏；填 0 关闭防抖。"
+  },
+  "api_endpoint": {
+    "description": "解析接口地址",
+    "type": "string",
+    "default": "https://xdown.app/api/ajaxSearch",
+    "hint": "默认使用 xdown.app 的公开接口（与原 astrbot_plugin_parser 相同）。接口改版时改这里。"
+  },
+  "api_origin": {
+    "description": "解析接口 Origin / Referer",
+    "type": "string",
+    "default": "https://xdown.app",
+    "hint": "接口对该请求头有校验，一般不需要改。"
+  },
+  "cookie": {
+    "description": "解析接口 Cookie",
+    "type": "string",
+    "default": "",
+    "secret": true,
+    "hint": "可选。接口出现风控时，把浏览器里的 xdown.app Cookie 填进来。"
+  },
+  "proxy": {
+    "description": "网络代理",
+    "type": "string",
+    "default": "",
+    "hint": "可选，形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，用于接口请求与媒体下载。"
+  },
+  "timeout": {
+    "description": "接口请求超时（秒）",
+    "type": "float",
+    "default": 20.0,
+    "hint": "解析接口的超时时间，下载超时是它的 3 倍。"
+  },
+  "retry": {
+    "description": "接口失败重试次数",
+    "type": "int",
+    "default": 2,
+    "hint": "接口不稳定时自动重试，重试间隔递增。"
+  }
+}

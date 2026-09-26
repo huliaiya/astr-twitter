@@ -1,0 +1,2 @@
+# AstrBot 本体已自带 aiohttp，这里只需补 BeautifulSoup
+beautifulsoup4>=4.12,<5
