@@ -97,6 +97,7 @@ async def plugin(plugin_module, tmp_path, monkeypatch):
     config = {
         "enabled": True,
         "auto_parse": True,
+        "auto_parse_default": True,  # 这组用例默认就走自动解析路径
         "interrupt_event": True,
         "notify_error": False,
         "debounce_seconds": 0,
@@ -240,15 +241,88 @@ async def test_ignore_own_message(plugin_module, plugin):
     assert await collect(plugin.on_message(event)) == []
 
 
-async def test_disabled_session_skips(plugin_module, plugin):
+# --------------------------------------------------------------------------- #
+# 自动解析开关：默认关闭 → /开启解析 后自动解析
+# --------------------------------------------------------------------------- #
+async def test_default_off_skips_until_enabled(plugin_module, plugin):
+    """默认策略为「关」时，没发过 /开启解析 的会话不应自动解析。"""
+    plugin.settings.auto_parse_default = False
     event = make_event(f"看 {URL_PHOTO}")
-    plugin._disabled_sessions.add(event.unified_msg_origin)
+    await plugin._ensure_policy()
+    assert plugin._effective_auto_parse(event.unified_msg_origin) == (False, "默认策略")
     assert await collect(plugin.on_message(event)) == []
+
+
+async def test_enable_command_reply_and_policy(plugin_module, plugin):
+    plugin.settings.auto_parse_default = False
+    event = make_event("/开启解析")
+    results = await collect(plugin.cmd_enable(event))
+    assert results and "已开启" in results[0].chain[0].text
+    # 开启后该会话变成「要自动解析」，且优先级来源是「本会话」
+    assert plugin._effective_auto_parse(event.unified_msg_origin) == (True, "本会话")
+    # 别的会话不受影响
+    assert plugin._effective_auto_parse("other:session")[0] is False
+
+
+async def test_disable_command_stops_auto_parse(plugin_module, plugin):
+    event = make_event(f"看 {URL_PHOTO}")
+    await collect(plugin.cmd_disable(make_event("/关闭解析")))
+    assert plugin._effective_auto_parse(event.unified_msg_origin) == (False, "本会话")
+    assert await collect(plugin.on_message(event)) == []
+
+
+async def test_global_toggle(plugin_module, plugin):
+    plugin.settings.auto_parse_default = False
+    results = await collect(plugin.cmd_enable(make_event("/开启解析 全局")))
+    assert "全局" in results[0].chain[0].text
+    # 任意会话都生效，来源是「全局开关」
+    assert plugin._effective_auto_parse("any:session") == (True, "全局开关")
+
+    results = await collect(plugin.cmd_disable(make_event("/关闭解析 全局")))
+    assert "全局" in results[0].chain[0].text
+    assert plugin._effective_auto_parse("any:session") == (False, "全局开关")
+
+
+async def test_session_setting_beats_global(plugin_module, plugin):
+    plugin.settings.auto_parse_default = False
+    mine = make_event("/开启解析")
+    other = make_event("看链接", session_id="other-session")
+
+    await collect(plugin.cmd_disable(make_event("/关闭解析 全局")))
+    await collect(plugin.cmd_enable(mine))
+
+    # 本会话显式开启，优先级高于「全局关闭」
+    assert plugin._effective_auto_parse(mine.unified_msg_origin) == (True, "本会话")
+    assert plugin._effective_auto_parse(other.unified_msg_origin) == (False, "全局开关")
+
+
+async def test_status_reports_session_state(plugin_module, plugin):
+    plugin.settings.auto_parse_default = False
+    results = await collect(plugin.cmd_status(make_event("/解析状态")))
+    text = results[0].chain[0].text
+    assert "默认策略" in text and "本会话" in text and "未设置" in text
 
 
 # --------------------------------------------------------------------------- #
 # 端到端（联网）：消息 → 解析 → 下载 → 消息链
 # --------------------------------------------------------------------------- #
+@live
+async def test_e2e_enable_then_auto_parse(plugin_module, plugin):
+    """用户实际场景：先发 /开启解析，之后发链接就会自动解析。"""
+    plugin.settings.auto_parse_default = False
+    before = make_event(f"看 {URL_PHOTO}")
+    assert await collect(plugin.on_message(before)) == [], "开启前不应自动解析"
+
+    await collect(plugin.cmd_enable(make_event("/开启解析")))
+
+    after = make_event(f"看 {URL_PHOTO}", session_id="session-1")
+    results = await collect(plugin.on_message(after))
+    assert results, "开启后应当自动解析"
+    kinds = [type(c).__name__ for c in results[0].chain]
+    assert "Image" in kinds, f"消息链里应有图片，实际：{kinds}"
+    assert after.is_stopped()
+
+
 @live
 async def test_e2e_image_message(plugin_module, plugin):
     event = make_event(f"看这个图 {URL_PHOTO}")

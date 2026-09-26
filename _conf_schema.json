@@ -6,10 +6,16 @@
     "hint": "关闭后插件不再响应任何消息，但指令仍然可用。"
   },
   "auto_parse": {
-    "description": "自动解析消息中的推特链接",
+    "description": "自动解析功能总开关",
     "type": "bool",
     "default": true,
-    "hint": "开启后，聊天里出现 X/Twitter 链接会自动解析并发送媒体。"
+    "hint": "关闭后所有会话都不再自动解析，但仍可用 /解析 <链接> 手动解析。"
+  },
+  "auto_parse_default": {
+    "description": "新会话默认自动解析",
+    "type": "bool",
+    "default": false,
+    "hint": "推荐保持关闭：这样只有发过 /开启解析 的会话才会自动解析（管理员也可以用 /开启解析 全局 一次开给所有会话）。开启则所有会话默认自动解析。"
   },
   "interrupt_event": {
     "description": "解析后终止事件传播",

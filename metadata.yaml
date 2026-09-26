@@ -14,7 +14,7 @@ desc: |
     /解析状态         查看插件与本会话状态
 
   也提供 LLM Tool `parse_twitter_link`，可让模型在对话中按需调用。
-version: 1.0.0
+version: 1.1.0
 author: huliaiya
 repo: https://github.com/huliaiya/astr-twitter
 astrbot_version: ">=4.9.2"

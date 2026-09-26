@@ -42,7 +42,10 @@ from .core.twitter import (
 )
 
 PLUGIN_NAME = "astr-twitter"
+# KV 键：显式开关的会话、以及全局开关
 KV_DISABLED_SESSIONS = "disabled_sessions"
+KV_ENABLED_SESSIONS = "enabled_sessions"
+KV_GLOBAL_AUTO_PARSE = "global_auto_parse"
 
 
 # --------------------------------------------------------------------------- #
@@ -54,6 +57,7 @@ class Settings:
 
     enabled: bool = True
     auto_parse: bool = True
+    auto_parse_default: bool = False
     interrupt_event: bool = True
     notify_error: bool = False
     max_links: int = 3
@@ -98,6 +102,7 @@ class Settings:
         return cls(
             enabled=as_bool("enabled", True),
             auto_parse=as_bool("auto_parse", True),
+            auto_parse_default=as_bool("auto_parse_default", False),
             interrupt_event=as_bool("interrupt_event", True),
             notify_error=as_bool("notify_error", False),
             max_links=max(1, as_int("max_links", 3)),
@@ -138,8 +143,11 @@ class TwitterPlugin(Star):
         self.settings = Settings.from_config(config)
         self._session: aiohttp.ClientSession | None = None
         self._downloader: Downloader | None = None
-        # 内存态：会话开关（kv 不可用时兜底）与防抖表
+        # 内存态：会话/全局开关（kv 不可用时兜底）与防抖表
         self._disabled_sessions: set[str] = set()
+        self._enabled_sessions: set[str] = set()
+        self._global_auto_parse: bool | None = None
+        self._policy_loaded = False
         self._recent: dict[str, float] = {}
         # 待清理的临时文件（发送完成后删除）
         self._pending_files: list[Path] = []
@@ -194,20 +202,52 @@ class TwitterPlugin(Star):
                 continue
         return Path(tempfile.gettempdir()) / PLUGIN_NAME / "twitter"
 
-    async def _load_disabled(self) -> set[str]:
-        try:
-            data = await self.get_kv_data(KV_DISABLED_SESSIONS, [])
-            if isinstance(data, list):
-                self._disabled_sessions = {str(x) for x in data}
-        except Exception:  # noqa: BLE001 - 老版本 AstrBot 没有 kv 接口
-            pass
-        return self._disabled_sessions
+    # ---------------- 自动解析开关（会话 / 全局） ---------------- #
 
-    async def _save_disabled(self) -> None:
+    async def _load_policy(self) -> None:
+        """从 KV 读取开关状态（老版本 AstrBot 没有 kv 接口时退化为纯内存）。"""
+        self._policy_loaded = True
+        try:
+            disabled = await self.get_kv_data(KV_DISABLED_SESSIONS, [])
+            if isinstance(disabled, list):
+                self._disabled_sessions = {str(x) for x in disabled}
+
+            enabled = await self.get_kv_data(KV_ENABLED_SESSIONS, [])
+            if isinstance(enabled, list):
+                self._enabled_sessions = {str(x) for x in enabled}
+
+            global_value = await self.get_kv_data(KV_GLOBAL_AUTO_PARSE, None)
+            if global_value is None or isinstance(global_value, bool):
+                self._global_auto_parse = global_value
+        except Exception:  # noqa: BLE001 - kv 不可用时保留内存态
+            pass
+
+    async def _ensure_policy(self) -> None:
+        """首次使用时加载一次，避免每条消息都读写存储。"""
+        if not self._policy_loaded:
+            await self._load_policy()
+
+    async def _save_policy(self) -> None:
+        self._policy_loaded = True
         try:
             await self.put_kv_data(KV_DISABLED_SESSIONS, sorted(self._disabled_sessions))
+            await self.put_kv_data(KV_ENABLED_SESSIONS, sorted(self._enabled_sessions))
+            await self.put_kv_data(KV_GLOBAL_AUTO_PARSE, self._global_auto_parse)
         except Exception:  # noqa: BLE001
             pass
+
+    def _effective_auto_parse(self, umo: str) -> tuple[bool, str]:
+        """判断某个会话现在是否要自动解析。
+
+        优先级：本会话显式开关 > 全局开关 > 配置里的默认策略。
+        """
+        if umo in self._enabled_sessions:
+            return True, "本会话"
+        if umo in self._disabled_sessions:
+            return False, "本会话"
+        if self._global_auto_parse is not None:
+            return self._global_auto_parse, "全局开关"
+        return self.settings.auto_parse_default, "默认策略"
 
     def _debounced(self, key: str) -> bool:
         """同一链接在防抖窗口内只解析一次。"""
@@ -253,6 +293,11 @@ class TwitterPlugin(Star):
                 if re.match(r"^\s*(解析|推特解析|tw|x解析|开启解析|关闭解析|解析状态)\b", rest):
                     return True
         return False
+
+    @staticmethod
+    def _is_global_scope(text: str) -> bool:
+        """`/开启解析 全局` → 作用于所有会话。"""
+        return bool(re.search(r"(全局|所有会话|全部会话|\bglobal\b)", text or "", re.IGNORECASE))
 
     # ---------------- 解析 → 发送 ---------------- #
 
@@ -356,9 +401,11 @@ class TwitterPlugin(Star):
         except Exception:  # noqa: BLE001
             pass
 
-        # 会话开关
-        disabled = self._disabled_sessions or await self._load_disabled()
-        if event.unified_msg_origin in disabled:
+        # 会话 / 全局开关：默认策略为「需先发 /开启解析」
+        await self._ensure_policy()
+        allowed, source = self._effective_auto_parse(event.unified_msg_origin)
+        if not allowed:
+            logger.debug(f"[{PLUGIN_NAME}] 本会话未开启自动解析（{source}），跳过")
             return
 
         urls = extract_urls(text)
@@ -414,32 +461,50 @@ class TwitterPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("开启解析")
     async def cmd_enable(self, event: AstrMessageEvent):
-        """开启当前会话的自动解析（管理员）"""
-        disabled = await self._load_disabled()
-        disabled.discard(event.unified_msg_origin)
-        await self._save_disabled()
-        yield event.plain_result("已开启本会话的推特自动解析 ✅")
+        """开启推特自动解析：/开启解析（本会话）或 /开启解析 全局（所有会话，管理员）"""
+        await self._ensure_policy()
+        if self._is_global_scope(event.message_str):
+            self._global_auto_parse = True
+            text = "已开启【全局】推特自动解析 ✅\n之后所有会话里发推特链接都会自动解析。"
+        else:
+            self._enabled_sessions.add(event.unified_msg_origin)
+            self._disabled_sessions.discard(event.unified_msg_origin)
+            text = "已开启本会话的推特自动解析 ✅\n之后本会话里发推特链接就会自动解析。"
+        await self._save_policy()
+        logger.info(f"[{PLUGIN_NAME}] 开启自动解析: {text.splitlines()[0]}")
+        yield event.plain_result(text)
 
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("关闭解析")
     async def cmd_disable(self, event: AstrMessageEvent):
-        """关闭当前会话的自动解析（管理员）"""
-        disabled = await self._load_disabled()
-        disabled.add(event.unified_msg_origin)
-        await self._save_disabled()
-        yield event.plain_result("已关闭本会话的推特自动解析 ⛔")
+        """关闭推特自动解析：/关闭解析（本会话）或 /关闭解析 全局（所有会话，管理员）"""
+        await self._ensure_policy()
+        if self._is_global_scope(event.message_str):
+            self._global_auto_parse = False
+            text = "已关闭【全局】推特自动解析 ⛔\n之后所有会话都不再自动解析（仍可用 /解析 <链接> 手动解析）。"
+        else:
+            self._disabled_sessions.add(event.unified_msg_origin)
+            self._enabled_sessions.discard(event.unified_msg_origin)
+            text = "已关闭本会话的推特自动解析 ⛔\n仍可用 /解析 <链接> 手动解析。"
+        await self._save_policy()
+        logger.info(f"[{PLUGIN_NAME}] 关闭自动解析: {text.splitlines()[0]}")
+        yield event.plain_result(text)
 
     @filter.command("解析状态")
     async def cmd_status(self, event: AstrMessageEvent):
         """查看当前会话与插件的解析状态"""
         s = self.settings
-        disabled = await self._load_disabled()
-        state = "已关闭" if event.unified_msg_origin in disabled else "已开启"
+        await self._ensure_policy()
+        allowed, source = self._effective_auto_parse(event.unified_msg_origin)
+        g = self._global_auto_parse
+        global_text = "未设置" if g is None else ("开" if g else "关")
         yield event.plain_result(
             "astr-twitter 状态：\n"
             f"- 插件总开关：{'开' if s.enabled else '关'}\n"
-            f"- 自动解析：{'开' if s.auto_parse else '关'}\n"
-            f"- 本会话：{state}\n"
+            f"- 自动解析总开关：{'开' if s.auto_parse else '关'}\n"
+            f"- 全局开关：{global_text}\n"
+            f"- 默认策略：{'开启' if s.auto_parse_default else '关闭（需先 /开启解析）'}\n"
+            f"- 本会话：{'自动解析中' if allowed else '不自动解析'}（来源：{source}）\n"
             f"- 接口：{s.api_endpoint}\n"
             f"- 代理：{s.proxy or '未设置'}"
         )
