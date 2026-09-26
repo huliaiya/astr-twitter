@@ -1,0 +1,6 @@
+# 测试下载产物（不入库）
+downloads/
+demo-out/
+node_modules/
+*.log
+.DS_Store

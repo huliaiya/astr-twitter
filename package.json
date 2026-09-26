@@ -1,0 +1,20 @@
+{
+  "name": "twitter-parser",
+  "version": "1.0.0",
+  "private": true,
+  "description": "独立版推特解析器，抽自 astrbot_plugin_parser 的 core/parsers/twitter.py（零依赖 Node 实现）",
+  "type": "module",
+  "main": "twitter-parser.mjs",
+  "bin": {
+    "twitter-parser": "twitter-parser.mjs"
+  },
+  "scripts": {
+    "parse": "node twitter-parser.mjs",
+    "test": "node test-twitter.mjs",
+    "test:offline": "node test-twitter.mjs --offline"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "license": "MIT"
+}
