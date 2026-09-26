@@ -25,6 +25,7 @@ from astrbot.api.platform import (  # noqa: E402
     MessageType,
     PlatformMetadata,
 )
+from astrbot.core.star.context import Context  # noqa: E402
 from astrbot.core.star.star_handler import star_handlers_registry  # noqa: E402
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -84,10 +85,17 @@ def make_event(
 
 
 class FakeContext:
-    """只用到 get_config，其余交给真实 Star。"""
+    """只用到 get_config 与 register_web_api，其余交给真实 Star。"""
+
+    # 共享 AstrBot 真实的注册表（Context.registered_web_apis 是类属性）
+    registered_web_apis = Context.registered_web_apis
 
     def get_config(self):
         return None
+
+    def register_web_api(self, route, view_handler, methods, desc):
+        """复用 AstrBot 的真实注册实现。"""
+        return Context.register_web_api(self, route, view_handler, methods, desc)
 
 
 @pytest.fixture
@@ -373,3 +381,185 @@ async def test_no_media_for_missing_tweet(plugin_module, plugin):
     assert all(
         not any(isinstance(c, (Image, Video)) for c in r.chain) for r in results
     )
+
+
+# --------------------------------------------------------------------------- #
+# 触发方式 / 历史 / 插件 Web API（离线）
+# --------------------------------------------------------------------------- #
+async def test_trigger_mode_command_only(plugin_module, plugin):
+    plugin.settings.trigger_mode = "command_only"
+    assert await collect(plugin.on_message(make_event(f"看 {URL_PHOTO}"))) == []
+
+
+async def test_trigger_mode_at_requires_mention(plugin_module, plugin):
+    from astrbot.api.message_components import At
+
+    plugin.settings.trigger_mode = "at"
+    event = make_event(f"看 {URL_PHOTO}")
+    assert await collect(plugin.on_message(event)) == [], "没 @机器人 时不应自动解析"
+
+    # 加上 @机器人 后应当继续（这里断言的是判定函数本身，联网路径由 live 用例覆盖）
+    at_event = make_event("", extra_components=[At(qq=99999)])
+    assert plugin._is_at_bot(at_event) is True
+    assert plugin._is_at_bot(event) is False
+
+
+async def test_history_command_without_records(plugin_module, plugin):
+    results = await collect(plugin.cmd_history(make_event("/解析历史")))
+    assert results and "还没有解析记录" in results[0].chain[0].text
+
+
+async def test_history_command_lists_records(plugin_module, plugin):
+    from core.history import HistoryRecord
+
+    await plugin._history().add(
+        HistoryRecord(url=URL_PHOTO, tweet_id="1870484479980052921", counts={"image": 1}, media=1, bytes=1234)
+    )
+    await plugin._history().add(
+        HistoryRecord(url="https://x.com/NASA/status/1", ok=False, error="未找到视频")
+    )
+    results = await collect(plugin.cmd_history(make_event("/解析历史 10")))
+    text = results[0].chain[0].text
+    assert URL_PHOTO in text and "未找到视频" in text and "成功率" in text
+
+
+def test_web_api_registered(plugin_module, plugin):
+    routes = {(route, tuple(methods)) for route, _h, methods, _d in Context.registered_web_apis}
+    assert (f"/{plugin_module.PLUGIN_ID}/history", ("GET",)) in routes
+    assert (f"/{plugin_module.PLUGIN_ID}/history/clear", ("POST",)) in routes
+
+
+async def test_api_history_returns_payload(plugin_module, plugin):
+    """按真实调用方式（绑定 PluginRequest）跑一遍页面用的接口。"""
+    from types import SimpleNamespace
+
+    from astrbot.api.web import PluginRequest, bind_request_context
+
+    await plugin._history().add(
+        plugin_module.HistoryRecord(url=URL_PHOTO, counts={"image": 1}, media=1, bytes=10)
+    )
+    raw = SimpleNamespace(
+        method="GET",
+        url=SimpleNamespace(path="/api/v1/plugins/extensions/x/history"),
+        headers={"accept": "application/json"},
+        cookies={},
+        client=None,
+        query_params=SimpleNamespace(multi_items=lambda: [("limit", "5")]),
+    )
+    with bind_request_context(PluginRequest(raw)):
+        payload = await plugin.api_history()
+        assert payload["status"] == "ok"
+        assert payload["data"]["records"][0]["url"] == URL_PHOTO
+        assert payload["data"]["stats"]["total"] == 1
+        assert payload["data"]["settings"]["trigger_mode"] in plugin_module.TRIGGER_MODES
+
+        cleared = await plugin.api_history_clear()
+        assert cleared["data"]["removed"] == 1
+    assert await plugin._history().list() == []
+
+
+async def test_settings_from_config_new_keys(plugin_module):
+    s = plugin_module.Settings.from_config(
+        {
+            "trigger_mode": "AT",  # 大小写不敏感，非法值回落到 all
+            "max_title_chars": "50",
+            "send_audio": True,
+            "parse_quoted": True,
+            "fallback_link": False,
+            "fallback_syndication": False,
+            "download_concurrency": "99",
+            "history_enabled": False,
+            "history_size": "5",
+        }
+    )
+    assert s.trigger_mode == "at"
+    assert s.max_title_chars == 50
+    assert s.send_audio is True and s.parse_quoted is True
+    assert s.fallback_link is False and s.fallback_syndication is False
+    assert s.download_concurrency == 8  # 上限保护
+    assert s.history_size == 10  # 下限保护
+    assert plugin_module.Settings.from_config({"trigger_mode": "乱填"}).trigger_mode == "all"
+
+
+@live
+async def test_e2e_at_trigger_and_history(plugin_module, plugin):
+    """@机器人 触发的自动解析，并确认写入了历史记录。"""
+    from astrbot.api.message_components import At
+
+    plugin.settings.trigger_mode = "at"
+    plugin.settings.history_enabled = True
+
+    without_at = make_event(f"看 {URL_PHOTO}")
+    assert await collect(plugin.on_message(without_at)) == []
+
+    with_at = make_event(f"看 {URL_PHOTO} ", extra_components=[At(qq=99999)])
+    results = await collect(plugin.on_message(with_at))
+    assert results and "Image" in [type(c).__name__ for c in results[0].chain]
+
+    records = await plugin._history().list(limit=5)
+    assert records, "解析成功后应写入历史"
+    top = records[0]
+    assert top["ok"] is True
+    assert top["url"] == URL_PHOTO
+    assert top["counts"]["image"] >= 1
+    assert top["bytes"] > 0 and top["source"] == "xdown"
+    assert top["session"] == with_at.unified_msg_origin
+
+    stats = await plugin._history().stats()
+    assert stats["ok"] >= 1 and stats["success_rate"] > 0
+
+
+@live
+async def test_e2e_quoted_follow(plugin_module, plugin):
+    """被引用/转发的原推：开启 parse_quoted 后媒体里应包含原推内容（尽力而为）。"""
+    plugin.settings.parse_quoted = True
+    event = make_event(f"看 {URL_GIF}")
+    results = await collect(plugin.on_message(event))
+    assert results
+    kinds = [type(c).__name__ for c in results[0].chain]
+    assert "Video" in kinds
+    # 至少要把主推的内容发出来；若接口给了引用链接，这里会多一条记录
+    records = await plugin._history().list(limit=5)
+    assert records and records[0]["url"] == URL_GIF
+
+
+# --------------------------------------------------------------------------- #
+# 打包完整性（离线）：页面、i18n、图标、metadata
+# --------------------------------------------------------------------------- #
+def test_packaging_assets_present(plugin_module):
+    """页面/多语言/图标/元数据都得齐，否则装到 AstrBot 里会缺东西。"""
+    import json as _json
+    import struct
+
+    index = ROOT / "pages" / "history" / "index.html"
+    app_js = ROOT / "pages" / "history" / "app.js"
+    assert index.is_file() and app_js.is_file()
+    assert "app.js" in index.read_text(encoding="utf-8")
+    # 页面必须用官方桥接 SDK 调接口，不要自己 fetch
+    js = app_js.read_text(encoding="utf-8")
+    assert "AstrBotPluginPage" in js and "apiGet" in js and "apiPost" in js
+
+    for name in ("zh-CN", "en-US", "zh", "en"):
+        data = _json.loads((ROOT / ".astrbot-plugin" / "i18n" / f"{name}.json").read_text(encoding="utf-8"))
+        assert data["pages"]["history"]["title"]
+
+    png = (ROOT / "logo.png").read_bytes()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    width, height = struct.unpack(">II", png[16:24])
+    assert (width, height) == (256, 256)
+
+    yaml = pytest.importorskip("yaml")
+    meta = yaml.safe_load((ROOT / "metadata.yaml").read_text(encoding="utf-8"))
+    assert [page["name"] for page in meta["pages"]] == ["history"]
+    assert (ROOT / "pages" / meta["pages"][0]["name"]).is_dir()
+
+
+def test_schema_covers_settings(plugin_module):
+    """每个 Settings 字段都应该能在配置面板里找到（避免加了配置却没法改）。"""
+    import json as _json
+
+    schema = _json.loads((ROOT / "_conf_schema.json").read_text(encoding="utf-8"))
+    fields = set(plugin_module.Settings().from_config({}).__dataclass_fields__)
+    missing = {field for field in fields if field not in schema}
+    assert not missing, f"_conf_schema.json 缺少配置项：{sorted(missing)}"
+    assert set(schema) == fields

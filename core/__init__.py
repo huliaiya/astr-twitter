@@ -2,6 +2,8 @@
 """astr-twitter 的解析核心（不依赖 AstrBot，可单独测试）。"""
 
 from .downloader import DownloadException, Downloader, Media, sniff_kind
+from .history import HistoryRecord, HistoryStore
+from .syndication import parse_syndication, parse_syndication_json, syndication_token
 from .twitter import (
     DEFAULT_ENDPOINT,
     DEFAULT_ORIGIN,
@@ -9,10 +11,13 @@ from .twitter import (
     ParseException,
     ParseResult,
     TwitterConfig,
+    clean_title,
     extract_urls,
+    find_quoted_url,
     parse_tweet,
     parse_twitter_html,
     search_url,
+    truncate,
 )
 
 __all__ = [
@@ -21,13 +26,20 @@ __all__ = [
     "Content",
     "DownloadException",
     "Downloader",
+    "HistoryRecord",
+    "HistoryStore",
     "Media",
     "ParseException",
     "ParseResult",
     "TwitterConfig",
+    "clean_title",
     "extract_urls",
+    "find_quoted_url",
+    "parse_syndication",
+    "parse_syndication_json",
     "parse_tweet",
     "parse_twitter_html",
     "search_url",
-    "sniff_kind",
+    "syndication_token",
+    "truncate",
 ]

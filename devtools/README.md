@@ -13,6 +13,7 @@ devtools/
 ├─ test-twitter.mjs              # Node 自测：URL 匹配 + 离线 HTML 解析 + 真实接口 + 真实下载
 ├─ package.json                  # 上面的 npm 脚本（零依赖）
 ├─ twitter_cli.py                # Python CLI，直接调用插件 core 层（推荐用这个调试）
+├─ make_logo.py                  # 用标准库生成插件图标 logo.png
 └─ fixtures/                     # 离线回归用 xdown 返回 HTML 快照（Node 与 pytest 共用）
 ```
 

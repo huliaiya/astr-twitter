@@ -1,0 +1,102 @@
+<!doctype html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>推特解析历史</title>
+    <style>
+      :root {
+        --bg: #ffffff;
+        --fg: #1f2328;
+        --muted: #6b7280;
+        --line: #e5e7eb;
+        --card: #f7f8fa;
+        --accent: #1d9bf0;
+        --danger: #ef4444;
+      }
+      html[data-theme="dark"] {
+        --bg: #16181c;
+        --fg: #e7e9ea;
+        --muted: #9aa0a6;
+        --line: #2f3336;
+        --card: #1c1f23;
+      }
+      * { box-sizing: border-box; }
+      body {
+        margin: 0;
+        padding: 16px 18px 40px;
+        background: var(--bg);
+        color: var(--fg);
+        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+          "Microsoft YaHei", sans-serif;
+      }
+      header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+      h1 { font-size: 18px; margin: 0; }
+      .grow { flex: 1; }
+      button {
+        border: 1px solid var(--line);
+        background: var(--card);
+        color: var(--fg);
+        border-radius: 8px;
+        padding: 6px 12px;
+        cursor: pointer;
+        font-size: 13px;
+      }
+      button:hover { border-color: var(--accent); color: var(--accent); }
+      button.danger:hover { border-color: var(--danger); color: var(--danger); }
+      .cards { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 8px; }
+      .card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 10px;
+        padding: 10px 14px;
+        min-width: 108px;
+      }
+      .card .k { color: var(--muted); font-size: 12px; }
+      .card .v { font-size: 19px; font-weight: 600; margin-top: 2px; }
+      .meta { color: var(--muted); font-size: 12px; margin: 8px 0 12px; }
+      table { width: 100%; border-collapse: collapse; }
+      th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
+      th { color: var(--muted); font-weight: 500; font-size: 12px; }
+      td.url { max-width: 330px; word-break: break-all; }
+      a { color: var(--accent); text-decoration: none; }
+      a:hover { text-decoration: underline; }
+      .ok { color: #10b981; }
+      .bad { color: var(--danger); }
+      .pill {
+        display: inline-block; padding: 1px 7px; margin-right: 4px;
+        border: 1px solid var(--line); border-radius: 999px;
+        font-size: 11px; color: var(--muted);
+      }
+      .empty { color: var(--muted); padding: 26px 4px; text-align: center; }
+      .hide { display: none; }
+    </style>
+  </head>
+  <body>
+    <header>
+      <h1 id="title">推特解析历史</h1>
+      <span class="grow"></span>
+      <button id="refresh">刷新</button>
+      <button id="clear" class="danger">清空</button>
+    </header>
+
+    <div class="cards" id="cards"></div>
+    <div class="meta" id="meta"></div>
+
+    <table>
+      <thead>
+        <tr>
+          <th style="width: 150px">时间</th>
+          <th style="width: 60px">结果</th>
+          <th style="width: 150px">媒体</th>
+          <th>推文</th>
+          <th style="width: 130px">大小</th>
+        </tr>
+      </thead>
+      <tbody id="rows"></tbody>
+    </table>
+    <div class="empty hide" id="empty">还没有解析记录，去群里发个推特链接试试～</div>
+
+    <script src="./app.js"></script>
+  </body>
+</html>

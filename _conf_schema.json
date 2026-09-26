@@ -17,6 +17,13 @@
     "default": false,
     "hint": "推荐保持关闭：这样只有发过 /开启解析 的会话才会自动解析（管理员也可以用 /开启解析 全局 一次开给所有会话）。开启则所有会话默认自动解析。"
   },
+  "trigger_mode": {
+    "description": "自动解析的触发方式",
+    "type": "string",
+    "default": "all",
+    "options": ["all", "at", "command_only"],
+    "hint": "all=消息里有链接就解析；at=需要 @机器人 才解析（群里更安静）；command_only=只用 /解析 指令或 LLM 工具，不自动解析。"
+  },
   "interrupt_event": {
     "description": "解析后终止事件传播",
     "type": "bool",
@@ -58,6 +65,48 @@
     "type": "bool",
     "default": false,
     "hint": "额外发送一张封面图；注意封面直链是 pbs.twimg.com，部分服务器直连不通。"
+  },
+  "send_audio": {
+    "description": "发送音频（MP3）",
+    "type": "bool",
+    "default": false,
+    "hint": "接口若返回音频按钮（下载 MP3），开启后会以语音消息发送；默认关闭，只发视频/图片/GIF。"
+  },
+  "parse_quoted": {
+    "description": "同时解析被引用/转发的原推",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后，如果推文里引用了另一条推（或转发），会再解析一层原推的媒体（只解析一层）。"
+  },
+  "max_title_chars": {
+    "description": "正文最大长度（字符）",
+    "type": "int",
+    "default": 300,
+    "hint": "过长的推文正文会被截断，避免刷屏；填 0 表示不限制。"
+  },
+  "fallback_link": {
+    "description": "媒体下载失败时发送原始链接",
+    "type": "bool",
+    "default": true,
+    "hint": "下载失败或超过大小上限时，把媒体直链作为文本发出来，至少用户能点开看。"
+  },
+  "download_concurrency": {
+    "description": "媒体下载并发数",
+    "type": "int",
+    "default": 3,
+    "hint": "多图推文并行下载的并发上限（1-8），越大越快也越容易被限流。"
+  },
+  "history_enabled": {
+    "description": "记录解析历史",
+    "type": "bool",
+    "default": true,
+    "hint": "把每次解析记录写入插件数据目录的 history.json，供 WebUI 的「推特解析历史」页面与 /解析历史 指令查看。"
+  },
+  "history_size": {
+    "description": "历史记录条数上限",
+    "type": "int",
+    "default": 200,
+    "hint": "超过上限后只保留最新的记录（10-2000）。"
   },
   "keep_files": {
     "description": "保留已下载的媒体文件",
@@ -107,5 +156,11 @@
     "type": "int",
     "default": 2,
     "hint": "接口不稳定时自动重试，重试间隔递增。"
+  },
+  "fallback_syndication": {
+    "description": "xdown 失败时使用官方后备接口",
+    "type": "bool",
+    "default": true,
+    "hint": "解析失败时再尝试 Twitter 官方 syndication 接口（免登录，直链为 pbs/video.twimg.com，可能需要代理）。"
   }
 }
