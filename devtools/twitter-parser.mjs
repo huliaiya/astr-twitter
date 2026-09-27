@@ -1,5 +1,5 @@
 // twitter-parser.mjs
-// 从 astrbot_plugin_parser 的 core/parsers/twitter.py 单独抽出的推特解析器（零依赖 Node 实现）
+// 从 astrbot_plugin_parser 的 core/parsers/twitter.py 单独抽出的X解析器（零依赖 Node 实现）
 //
 // 原实现链路：
 //   1. BaseParser.search_url() 用「关键词 + 正则」匹配 x.com / twitter.com 的 status 链接
@@ -25,7 +25,7 @@ const TWITTER_RE =
 const X_RE = /(?<![A-Za-z0-9.-])(?:www\.)?x\.com\/(?:[A-Za-z0-9_]+\/)*status\/\d+/;
 
 /**
- * 从任意文本里提取推特 status 链接（对应 BaseParser.search_url 的匹配部分）
+ * 从任意文本里提取X status 链接（对应 BaseParser.search_url 的匹配部分）
  * @param {string} text
  * @returns {{keyword: string, url: string, id: string}|null}
  */
@@ -46,7 +46,7 @@ export function matchTweetUrl(text) {
   return null;
 }
 
-/** 从文本中提取所有推特链接（群聊消息可能带多条） */
+/** 从文本中提取所有X链接（群聊消息可能带多条） */
 export function matchAllTweetUrls(text) {
   const out = [];
   for (const re of [X_RE, TWITTER_RE]) {
@@ -83,7 +83,7 @@ export class ParseException extends Error {
 
 /**
  * 请求 xdown 接口，返回 JSON（对应 _req_xdown_api，含重试）
- * @param {string} url 推特链接
+ * @param {string} url X链接
  * @param {{retry?: number, timeout?: number, fetchImpl?: typeof fetch}} [opts]
  */
 export async function reqXdownApi(url, opts = {}) {
@@ -192,7 +192,7 @@ export function parseXdownHtml(html) {
 /* ------------------------------------------------------------------ */
 
 /**
- * 解析一条推特链接，返回与插件 ParseResult 对齐的结构
+ * 解析一条X链接，返回与插件 ParseResult 对齐的结构
  * @param {string} input 链接或包含链接的文本
  * @param {{retry?: number, timeout?: number, fetchImpl?: typeof fetch, raw?: boolean}} [opts]
  */
@@ -225,7 +225,7 @@ export async function parseTweet(input, opts = {}) {
   }
 
   const result = {
-    platform: { name: "twitter", display_name: "推特" },
+    platform: { name: "twitter", display_name: "X" },
     url,
     tweet_id: htmlParts.tweetId ?? matched?.id ?? null,
     title: htmlParts.title,
@@ -310,7 +310,7 @@ export async function downloadMedia(url, outDir, opts = {}) {
 
 function usage() {
   console.log(`用法:
-  node twitter-parser.mjs <推特链接或包含链接的文本> [--download [目录]] [--raw]
+  node twitter-parser.mjs <X链接或包含链接的文本> [--download [目录]] [--raw]
 
 参数:
   --download [目录]  解析后真实下载全部媒体到指定目录（默认 ./downloads），并校验文件头

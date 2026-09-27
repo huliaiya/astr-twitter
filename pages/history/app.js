@@ -129,7 +129,7 @@
   }
 
   function boot() {
-    el("title").textContent = t("pages.history.title", "推特解析历史");
+    el("title").textContent = t("pages.history.title", "X 解析历史");
     var ctx = (bridge.getContext && bridge.getContext()) || {};
     document.documentElement.setAttribute("data-theme", ctx.isDark ? "dark" : "light");
     el("refresh").textContent = t("pages.history.refresh", "刷新");

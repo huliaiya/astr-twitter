@@ -94,6 +94,12 @@
     "default": false,
     "hint": "额外发送一张封面图；注意封面直链是 pbs.twimg.com，部分服务器直连不通。"
   },
+  "quote_reply": {
+    "description": "解析结果引用触发它的消息",
+    "type": "bool",
+    "default": true,
+    "hint": "开启后机器人发送解析结果时会「引用回复」发链接的那条消息（谁发的就引用谁）；部分平台不支持时自动降级为普通发送。"
+  },
   "send_audio": {
     "description": "发送音频（MP3）",
     "type": "bool",
@@ -128,7 +134,7 @@
     "description": "记录解析历史",
     "type": "bool",
     "default": true,
-    "hint": "把每次解析记录写入插件数据目录的 history.json，供 WebUI 的「推特解析历史」页面与 /解析历史 指令查看。"
+    "hint": "把每次解析记录写入插件数据目录的 history.json，供 WebUI 的「X解析历史」页面与 /解析历史 指令查看。"
   },
   "history_size": {
     "description": "历史记录条数上限",

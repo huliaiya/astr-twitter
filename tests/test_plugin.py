@@ -219,7 +219,7 @@ def test_collect_text_reads_json_card(plugin_module, plugin):
     ("text", "expected"),
     [
         ("/解析 https://x.com/a/status/1", True),
-        ("/推特解析 https://x.com/a/status/1", True),
+        ("/X解析 https://x.com/a/status/1", True),
         ("/关闭解析", True),
         ("看这个 https://x.com/a/status/1", False),
     ],
@@ -370,6 +370,8 @@ async def test_e2e_manual_command(plugin_module, plugin):
     event = make_event(f"/解析 {URL_PHOTO}")
     results = await collect(plugin.cmd_parse(event))
     assert results and "Image" in [type(c).__name__ for c in results[0].chain]
+    # 手动解析同样引用发指令的那条消息
+    assert type(results[0].chain[0]).__name__ == "Reply"
 
 
 @live
@@ -724,3 +726,97 @@ async def test_handle_url_no_placeholder_downloads(plugin_module, plugin, tmp_pa
 
     await plugin._handle_url(make_event("x"), URL_VIDEO, notify_error=True)
     assert [url for url, _ in downloader.calls] == ["https://dl.snapcdn.app/get?token=AAA"]
+
+
+# --------------------------------------------------------------------------- #
+# 引用回复 / X 命名（离线）
+# --------------------------------------------------------------------------- #
+async def test_with_quote_inserts_reply(plugin_module, plugin):
+    from astrbot.api.message_components import Plain, Reply
+
+    segments = [Plain(text="hi")]
+    quoted = plugin._with_quote(make_event("x"), segments)
+    assert isinstance(quoted[0], Reply)
+    assert str(quoted[0].id) == "message-1", "要引用触发它的那条消息"
+    assert quoted[1] is segments[0]
+    assert plugin._with_quote(make_event("x"), []) == []
+
+
+async def test_with_quote_can_be_disabled(plugin_module, plugin):
+    from astrbot.api.message_components import Plain
+
+    plugin.settings.quote_reply = False
+    segments = [Plain(text="hi")]
+    assert plugin._with_quote(make_event("x"), segments) is segments
+
+
+async def test_with_quote_without_message_id(plugin_module, plugin):
+    from astrbot.api.message_components import Plain
+
+    event = make_event("x")
+    event.message_obj.message_id = ""
+    segments = [Plain(text="hi")]
+    assert plugin._with_quote(event, segments) is segments, "拿不到消息 ID 就别硬加引用"
+
+
+async def test_send_chain_falls_back(plugin_module, plugin):
+    """带引用发送失败 → 退回不带引用；再失败 → 退回纯链接。"""
+    from astrbot.api.message_components import Plain
+
+    plugin.settings.quote_reply = True
+    segments = [Plain(text="hi")]
+    event = make_event("x")
+
+    calls: list[list] = []
+    original = event.chain_result
+
+    def flaky(chain):
+        calls.append(list(chain))
+        if len(calls) == 1:
+            raise RuntimeError("平台不支持引用")
+        return original(chain)
+
+    event.chain_result = flaky  # type: ignore[method-assign]
+    items = [item async for item in plugin._send_chain(event, segments, "https://x.com/a/status/1")]
+    assert len(calls) == 2, "第一次带引用失败后应重试"
+    assert type(calls[0][0]).__name__ == "Reply" and type(calls[1][0]).__name__ == "Plain"
+    assert items and items[-1].chain[0].text == "hi"
+
+    # 完全发不出去时退回链接
+    event2 = make_event("x")
+
+    def always_fail(chain):
+        raise RuntimeError("全挂了")
+
+    event2.chain_result = always_fail  # type: ignore[method-assign]
+    items2 = [item async for item in plugin._send_chain(event2, segments, "https://x.com/a/status/1")]
+    assert items2 and items2[-1].chain[0].text == "https://x.com/a/status/1"
+
+
+@live
+async def test_e2e_auto_parse_quotes_sender(plugin_module, plugin):
+    """联网：自动解析时默认引用「发链接的那个人」的那条消息。"""
+    plugin.settings.auto_parse_default = True
+    plugin.settings.quote_reply = True
+
+    event = make_event(f"看 {URL_PHOTO}")
+    results = await collect(plugin.on_message(event))
+    assert results, "应当自动解析"
+    chain = results[0].chain
+    assert type(chain[0]).__name__ == "Reply", f"链首应当是引用回复，实际：{chain}"
+    assert str(chain[0].id) == "message-1"
+
+    # 关掉开关后不应再有引用
+    plugin.settings.quote_reply = False
+    results2 = await collect(plugin.on_message(make_event(f"看 {URL_PHOTO}", session_id="session-2")))
+    assert results2 and type(results2[0].chain[0]).__name__ != "Reply"
+
+
+def test_names_are_x_not_twitter(plugin_module):
+    """"插件的对外文案统一改成 X，内部 ID 保持不变。"""
+    from pathlib import Path as _Path
+
+    metadata = (_Path(ROOT) / "metadata.yaml").read_text(encoding="utf-8")
+    assert "display_name: X 解析" in metadata
+    assert "推特" not in metadata.replace("/X解析", "")
+    assert plugin_module.PLUGIN_ID == "astrbot_plugin_twitter", "安装目录/路由前缀不能改，否则升级会重复安装"

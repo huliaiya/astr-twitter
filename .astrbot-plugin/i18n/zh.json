@@ -1,11 +1,11 @@
 {
   "metadata": {
-    "display_name": "推特解析（astr-twitter）",
+    "display_name": "X 解析（astr-twitter）",
     "desc": "自动解析 X/Twitter 链接并发送视频 / 图片 / GIF，支持按会话开关、解析历史与 WebUI 管理页。"
   },
   "pages": {
     "history": {
-      "title": "推特解析历史",
+      "title": "X 解析历史",
       "topAuthors": "常解析：",
       "refresh": "刷新",
       "clear": "清空",

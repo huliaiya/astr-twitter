@@ -1,11 +1,11 @@
 {
   "metadata": {
-    "display_name": "Twitter Parser (astr-twitter)",
+    "display_name": "X Parser (astr-twitter)",
     "desc": "Parse X/Twitter links and send videos, images and GIFs, with per-session toggles, parse history and a WebUI page."
   },
   "pages": {
     "history": {
-      "title": "Twitter parse history",
+      "title": "X parse history",
       "topAuthors": "Top authors: ",
       "refresh": "Refresh",
       "clear": "Clear",

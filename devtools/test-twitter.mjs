@@ -1,5 +1,5 @@
 // test-twitter.mjs
-// 推特解析器自测：URL 匹配（离线） + 真实接口解析（在线） + 真实下载校验（在线）
+// X解析器自测：URL 匹配（离线） + 真实接口解析（在线） + 真实下载校验（在线）
 //
 // 运行： node test-twitter.mjs            # 全部
 //        node test-twitter.mjs --offline  # 只跑离线用例（不联网）

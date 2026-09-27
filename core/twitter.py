@@ -1,5 +1,5 @@
 # -*- coding: utf-8 -*-
-"""astr-twitter 的推特解析核心（不依赖 AstrBot，可独立测试）。
+"""astr-twitter 的X解析核心（不依赖 AstrBot，可独立测试）。
 
 从 astrbot_plugin_parser 的 core/parsers/twitter.py 抽取：
   @handle 正则匹配 → POST xdown.app/api/ajaxSearch → 解析返回 HTML → 统一 ParseResult
@@ -331,7 +331,7 @@ def search_url(text: str) -> tuple[str, re.Match[str]] | None:
 
 
 def extract_urls(text: str) -> list[str]:
-    """提取文本中所有推特链接（去重、保序、补上 https://）。"""
+    """提取文本中所有X链接（去重、保序、补上 https://）。"""
     found: list[tuple[int, str]] = []
     for re_obj in (pattern for _, pattern in PATTERNS):
         for m in re_obj.finditer(text or ""):
@@ -558,10 +558,10 @@ async def parse_tweet(
     session: aiohttp.ClientSession | None = None,
     fallback: bool = False,
 ) -> ParseResult:
-    """解析一条推特链接（或含链接的文本）。
+    """解析一条X链接（或含链接的文本）。
 
     Args:
-        input_text: 推特链接或包含链接的文本
+        input_text: X链接或包含链接的文本
         config: 解析器配置
         session: 可选的共享 aiohttp 会话（插件里复用，避免每次新建连接池）
         fallback: xdown 失败时是否再尝试 Twitter 官方 syndication 接口

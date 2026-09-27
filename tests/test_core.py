@@ -668,3 +668,44 @@ def test_emoji_button_skipped_as_image() -> None:
     result = parse_twitter_html(emoji_html)
     assert result.counts["image"] == 0, "表情图片不该被当成推文图片"
     assert result.counts["video"] == 0
+
+
+# --------------------------------------------------------------------------- #
+# 图标：官方 X 字形栅格化
+# --------------------------------------------------------------------------- #
+def test_logo_glyph_matches_official_geometry() -> None:
+    """logo.png 必须是用官方 X 字形渲染的：前景占比要符合官方几何。
+
+    官方路径在 24×24 视图框里填充率约 24.6%（用 librsvg 渲染核对过），
+    所以缩放到图标宽度的 62% 后，前景应占底色面积的 9.4% 左右。
+    这条断言顺便锁住了填充规则：如果误把字形填成「实心胖 X」，比例会接近 36%。
+    """
+    import sys as _sys
+    from pathlib import Path as _Path
+
+    root = _Path(__file__).resolve().parents[1]
+    _sys.path.insert(0, str(root / "devtools"))
+    try:
+        import make_logo
+    finally:
+        _sys.path.pop(0)
+
+    polygons = make_logo.parse_path(make_logo.X_PATH)
+    assert [len(p) for p in polygons] == [12, 8], "官方 X 字形是 12+8 两个子路径"
+
+    size = 256
+    glyph = size * make_logo.GLYPH_RATIO
+    mask = make_logo.fill_mask(
+        polygons, size, size, glyph / make_logo.VIEWBOX, (size - glyph) / 2
+    )
+    filled = sum(1 for row in mask for value in row if value > 128)
+    background = sum(1 for row in make_logo.rounded_square_mask(size, int(size * 0.22)) for v in row if v > 128)
+    ratio = filled / background
+    assert 0.085 < ratio < 0.105, f"前景/底色比例 {ratio:.3f} 不符合官方字形"
+
+    png = (root / "logo.png").read_bytes()
+    assert png[:8] == b"\x89PNG\r\n\x1a\n"
+    import struct
+
+    width, height = struct.unpack(">II", png[16:24])
+    assert (width, height) == (256, 256)

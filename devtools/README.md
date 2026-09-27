@@ -1,9 +1,9 @@
-# devtools：独立版推特解析器（开发与回归工具）
+# devtools：独立版X解析器（开发与回归工具）
 
 > 这个目录是**工具与回归测试**，不是插件本体。插件本体见仓库根目录的 `main.py` + `core/`。
 
 从 [`Zhalslar/astrbot_plugin_parser`](https://github.com/Zhalslar/astrbot_plugin_parser) 的
-`core/parsers/twitter.py` 中**单独抽出来的推特解析器**，去掉了 AstrBot 的全部依赖
+`core/parsers/twitter.py` 中**单独抽出来的X解析器**，去掉了 AstrBot 的全部依赖
 （`BaseParser` / `PluginConfig` / `Downloader` / `CookieJar`），可以脱离 AstrBot 独立运行。
 当初先用它把解析链路跑通并实测，之后才封装成 AstrBot 插件，因此这里保留了离线 fixture 与 Node 版自测。
 
@@ -13,7 +13,8 @@ devtools/
 ├─ test-twitter.mjs              # Node 自测：URL 匹配 + 离线 HTML 解析 + 真实接口 + 真实下载
 ├─ package.json                  # 上面的 npm 脚本（零依赖）
 ├─ twitter_cli.py                # Python CLI，直接调用插件 core 层（推荐用这个调试）
-├─ make_logo.py                  # 用标准库生成插件图标 logo.png
+├─ make_logo.py                  # 用标准库把官方 X 字形栅格化成 logo.png（可 --preview 预览）
+├─ vendor/x-logo.svg             # 官方 X 标志矢量路径（simple-icons，来源留档）
 └─ fixtures/                     # 离线回归用 xdown 返回 HTML 快照（Node 与 pytest 共用）
 ```
 

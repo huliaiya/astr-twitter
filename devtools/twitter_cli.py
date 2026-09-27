@@ -63,8 +63,8 @@ async def run(input_text: str, download_dir: str | None) -> int:
 
 
 def main() -> None:
-    parser = argparse.ArgumentParser(description="独立版推特解析器 CLI（无需 AstrBot）")
-    parser.add_argument("input", help="推特链接或包含链接的文本")
+    parser = argparse.ArgumentParser(description="独立版X解析器 CLI（无需 AstrBot）")
+    parser.add_argument("input", help="X链接或包含链接的文本")
     parser.add_argument("--download", nargs="?", const="downloads", help="下载媒体到目录")
     args = parser.parse_args()
     raise SystemExit(asyncio.run(run(args.input, args.download)))

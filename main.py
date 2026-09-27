@@ -85,6 +85,7 @@ class Settings:
     send_link: bool = False
     caption_emoji: bool = False
     send_cover: bool = False
+    quote_reply: bool = True  # 解析结果引用触发它的那条消息
     send_audio: bool = False
     parse_quoted: bool = False
     keep_files: bool = False
@@ -147,6 +148,7 @@ class Settings:
             send_link=as_bool("send_link", False),
             caption_emoji=as_bool("caption_emoji", False),
             send_cover=as_bool("send_cover", False),
+            quote_reply=as_bool("quote_reply", True),
             send_audio=as_bool("send_audio", False),
             parse_quoted=as_bool("parse_quoted", False),
             keep_files=as_bool("keep_files", False),
@@ -212,13 +214,13 @@ class TwitterPlugin(Star):
                 f"/{PLUGIN_ID}/history",
                 self.api_history,
                 ["GET"],
-                "推特解析历史",
+                "X 解析历史",
             )
             self.context.register_web_api(
                 f"/{PLUGIN_ID}/history/clear",
                 self.api_history_clear,
                 ["POST"],
-                "清空推特解析历史",
+                "清空 X 解析历史",
             )
             logger.debug(f"[{PLUGIN_NAME}] 已注册插件 Web API：/{PLUGIN_ID}/history")
         except Exception as e:  # noqa: BLE001
@@ -393,7 +395,7 @@ class TwitterPlugin(Star):
         for prefix in ("/", "!", "！", "。"):
             if stripped.startswith(prefix):
                 rest = stripped[len(prefix) :]
-                if re.match(r"^\s*(解析|推特解析|tw|x解析|开启解析|关闭解析|解析状态|解析历史)\b", rest):
+                if re.match(r"^\s*(解析|[Xx]解析|tw|开启解析|关闭解析|解析状态|解析历史)\b", rest):
                     return True
         return False
 
@@ -419,6 +421,42 @@ class TwitterPlugin(Star):
         return f"[At:{self_id}]" in text or f"@{self_id}" in text
 
     # ---------------- 解析 → 发送 ---------------- #
+
+    def _with_quote(self, event: AstrMessageEvent, segments: list[Any]) -> list[Any]:
+        """按需在最前面插入「引用回复」，引用触发解析的那条消息（谁发的就引用谁）。
+
+        AstrBot 官方的 result_decorate 阶段也是用 Reply(id=message_id) 做的，
+        这里做成插件级开关，方便按需关闭。
+        """
+        if not self.settings.quote_reply or Comp is None or not segments:
+            return segments
+        reply_cls = getattr(Comp, "Reply", None)
+        if reply_cls is None:  # 老版本 AstrBot 没有 Reply 组件
+            return segments
+        message_id = getattr(getattr(event, "message_obj", None), "message_id", None)
+        if not message_id:
+            return segments
+        try:
+            return [reply_cls(id=message_id), *segments]
+        except Exception as e:  # noqa: BLE001
+            logger.debug(f"[{PLUGIN_NAME}] 构造引用回复失败，改为普通发送: {e}")
+            return segments
+
+    async def _send_chain(self, event: AstrMessageEvent, segments: list[Any], url: str):
+        """发送媒体链：先带引用发，失败再退到不带引用，最后退到纯链接。"""
+        attempts: list[list[Any]] = []
+        quoted = self._with_quote(event, segments)
+        if quoted is not segments:
+            attempts.append(quoted)
+        attempts.append(segments)
+        for index, chain in enumerate(attempts):
+            try:
+                yield event.chain_result(chain)
+                return
+            except Exception as e:  # noqa: BLE001 - 个别平台不支持视频/引用
+                label = "（带引用）" if index == 0 and len(attempts) > 1 else ""
+                logger.warning(f"[{PLUGIN_NAME}] 发送失败{label}: {e}")
+        yield event.plain_result(url)
 
     @staticmethod
     async def _reply(event: AstrMessageEvent, text: str) -> None:
@@ -632,7 +670,7 @@ class TwitterPlugin(Star):
 
     @filter.event_message_type(filter.EventMessageType.ALL, priority=10)
     async def on_message(self, event: AstrMessageEvent):
-        """监听所有消息，发现推特链接就解析并发送媒体。"""
+        """监听所有消息，发现 X 链接就解析并发送媒体。"""
         settings = self.settings
         if not settings.enabled or not settings.auto_parse:
             return
@@ -676,11 +714,8 @@ class TwitterPlugin(Star):
             if not segments:
                 continue
             handled = True
-            try:
-                yield event.chain_result(segments)
-            except Exception as e:  # noqa: BLE001 - 个别平台不支持视频时降级为文本
-                logger.warning(f"[{PLUGIN_NAME}] 发送失败，降级为链接: {e}")
-                yield event.plain_result(url)
+            async for item in self._send_chain(event, segments, url):
+                yield item
 
         self._flush_cleanup()
 
@@ -690,12 +725,12 @@ class TwitterPlugin(Star):
 
     # ---------------- 指令 ---------------- #
 
-    @filter.command("解析", alias={"推特解析", "tw", "x解析"})
+    @filter.command("解析", alias={"X解析", "x解析", "tw", "推特解析"})
     async def cmd_parse(self, event: AstrMessageEvent):
-        """解析推特链接并把媒体发到当前会话：/解析 <链接>"""
+        """解析 X 链接并把媒体发到当前会话：/解析 <链接>"""
         urls = extract_urls(self._collect_text(event))
         if not urls:
-            yield event.plain_result("用法：/解析 <推特链接>")
+            yield event.plain_result("用法：/解析 <X 链接>")
             return
 
         sent = 0
@@ -703,11 +738,8 @@ class TwitterPlugin(Star):
             segments = await self._handle_url(event, url, notify_error=True)
             if segments:
                 sent += 1
-                try:
-                    yield event.chain_result(segments)
-                except Exception as e:  # noqa: BLE001
-                    logger.warning(f"[{PLUGIN_NAME}] 发送失败: {e}")
-                    yield event.plain_result(url)
+                async for item in self._send_chain(event, segments, url):
+                    yield item
         self._flush_cleanup()
         if sent == 0:
             logger.info(f"[{PLUGIN_NAME}] /解析 未成功解析任何链接")
@@ -747,15 +779,15 @@ class TwitterPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("开启解析")
     async def cmd_enable(self, event: AstrMessageEvent):
-        """开启推特自动解析：/开启解析（本会话）或 /开启解析 全局（所有会话，管理员）"""
+        """开启 X 自动解析：/开启解析（本会话）或 /开启解析 全局（所有会话，管理员）"""
         await self._ensure_policy()
         if self._is_global_scope(event.message_str):
             self._global_auto_parse = True
-            text = "已开启【全局】推特自动解析 ✅\n之后所有会话里发推特链接都会自动解析。"
+            text = "已开启【全局】X 自动解析 ✅\n之后所有会话里发 X 链接都会自动解析。"
         else:
             self._enabled_sessions.add(event.unified_msg_origin)
             self._disabled_sessions.discard(event.unified_msg_origin)
-            text = "已开启本会话的推特自动解析 ✅\n之后本会话里发推特链接就会自动解析。"
+            text = "已开启本会话的 X 自动解析 ✅\n之后本会话里发 X 链接就会自动解析。"
         await self._save_policy()
         logger.info(f"[{PLUGIN_NAME}] 开启自动解析: {text.splitlines()[0]}")
         yield event.plain_result(text)
@@ -763,15 +795,15 @@ class TwitterPlugin(Star):
     @filter.permission_type(filter.PermissionType.ADMIN)
     @filter.command("关闭解析")
     async def cmd_disable(self, event: AstrMessageEvent):
-        """关闭推特自动解析：/关闭解析（本会话）或 /关闭解析 全局（所有会话，管理员）"""
+        """关闭 X 自动解析：/关闭解析（本会话）或 /关闭解析 全局（所有会话，管理员）"""
         await self._ensure_policy()
         if self._is_global_scope(event.message_str):
             self._global_auto_parse = False
-            text = "已关闭【全局】推特自动解析 ⛔\n之后所有会话都不再自动解析（仍可用 /解析 <链接> 手动解析）。"
+            text = "已关闭【全局】X 自动解析 ⛔\n之后所有会话都不再自动解析（仍可用 /解析 <链接> 手动解析）。"
         else:
             self._disabled_sessions.add(event.unified_msg_origin)
             self._enabled_sessions.discard(event.unified_msg_origin)
-            text = "已关闭本会话的推特自动解析 ⛔\n仍可用 /解析 <链接> 手动解析。"
+            text = "已关闭本会话的 X 自动解析 ⛔\n仍可用 /解析 <链接> 手动解析。"
         await self._save_policy()
         logger.info(f"[{PLUGIN_NAME}] 关闭自动解析: {text.splitlines()[0]}")
         yield event.plain_result(text)
@@ -816,7 +848,8 @@ class TwitterPlugin(Star):
             yield event.plain_result(f"未能解析该链接：{url}")
             return
         try:
-            yield event.chain_result(segments)
+            async for item in self._send_chain(event, segments, f"解析成功但发送失败：{url}"):
+                yield item
         except Exception as e:  # noqa: BLE001
             logger.warning(f"[{PLUGIN_NAME}] llm_tool 发送失败: {e}")
             yield event.plain_result(f"解析成功但发送失败：{url}")

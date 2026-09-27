@@ -5,7 +5,7 @@
 
     https://cdn.syndication.twimg.com/tweet-result?id=<tweet_id>&token=<token>&lang=zh
 
-`token` 是推特前端用推文 ID 算出来的固定串（见 `syndication_token()`）。
+`token` 是X前端用推文 ID 算出来的固定串（见 `syndication_token()`）。
 这个接口不需要任何登录凭证，返回的 JSON 里自带：
 
   - `text`            正文
@@ -42,7 +42,7 @@ STATUS_ID_RE = re.compile(r"/status/(\d+)")
 
 
 def syndication_token(tweet_id: str) -> str:
-    """复刻推特前端的 token：`((id / 1e15) * π).toString(36).replace(/0+|\\./g, "")`。
+    """复刻X前端的 token：`((id / 1e15) * π).toString(36).replace(/0+|\\./g, "")`。
 
     JS 的 `Number.prototype.toString(radix)`（V8 的 DoubleToRadix）在非十进制下会
     一直输出小数位，直到「再多的位也影响不到这个 double」为止，所以这里按 V8 的
