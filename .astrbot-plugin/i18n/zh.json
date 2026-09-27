@@ -11,7 +11,17 @@
       "clear": "清空",
       "confirmClear": "确定清空全部解析历史吗？",
       "loadFailed": "加载失败：",
-      "clearFailed": "清空失败："
+      "clearFailed": "清空失败：",
+      "total": "总解析",
+      "ok": "成功",
+      "failed": "失败",
+      "rate": "成功率",
+      "video": "视频",
+      "image": "图片",
+      "gif": "GIF",
+      "bytes": "流量",
+      "loading": "正在加载…",
+      "waiting": "正在等待 AstrBot WebUI 响应…"
     }
   }
 }

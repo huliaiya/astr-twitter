@@ -26,6 +26,7 @@ from core.twitter import (
     ParseResult,
     TwitterConfig,
     build_caption,
+    format_elapsed,
     clean_title,
     decode_snapcdn,
     extract_handle,
@@ -709,3 +710,30 @@ def test_logo_glyph_matches_official_geometry() -> None:
 
     width, height = struct.unpack(">II", png[16:24])
     assert (width, height) == (256, 256)
+
+
+# --------------------------------------------------------------------------- #
+# 解析耗时
+# --------------------------------------------------------------------------- #
+def test_format_elapsed() -> None:
+    assert format_elapsed(0.42) == "0.4s"
+    assert format_elapsed(9.96) == "10.0s"
+    assert format_elapsed(12.3) == "12s"
+    assert format_elapsed(65) == "1m05s"
+    assert format_elapsed(None) == "-"
+    assert format_elapsed(-5) == "0.0s"
+
+
+def test_build_caption_elapsed_on_top() -> None:
+    result = ParseResult(url="https://x.com/a/status/1", author_handle="a")
+    caption = build_caption(result, elapsed=3.14, show_elapsed=True)
+    assert caption.splitlines()[0] == "解析耗时 3.1s"
+    assert "作者：@a" in caption
+
+    plain = build_caption(result, elapsed=3.14, show_elapsed=False)
+    assert "解析耗时" not in plain
+    assert plain.splitlines()[0].startswith("作者：")
+
+    # 带表情开关时给个时钟
+    with_emoji = build_caption(result, emoji=True, elapsed=2.0, show_elapsed=True)
+    assert with_emoji.startswith("⏱ 解析耗时 2.0s")

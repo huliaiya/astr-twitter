@@ -11,7 +11,17 @@
       "clear": "Clear",
       "confirmClear": "Clear all parse history?",
       "loadFailed": "Failed to load: ",
-      "clearFailed": "Failed to clear: "
+      "clearFailed": "Failed to clear: ",
+      "total": "Total",
+      "ok": "OK",
+      "failed": "Failed",
+      "rate": "Success rate",
+      "video": "Videos",
+      "image": "Images",
+      "gif": "GIFs",
+      "bytes": "Traffic",
+      "loading": "Loading…",
+      "waiting": "Waiting for the AstrBot WebUI…"
     }
   }
 }

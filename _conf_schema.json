@@ -100,6 +100,18 @@
     "default": true,
     "hint": "开启后机器人发送解析结果时会「引用回复」发链接的那条消息（谁发的就引用谁）；部分平台不支持时自动降级为普通发送。"
   },
+  "show_elapsed": {
+    "description": "简介顶部显示解析耗时",
+    "type": "bool",
+    "default": true,
+    "hint": "在最顶上显示「解析耗时 x.xs」，包含解析接口 + 下载媒体的总时间。"
+  },
+  "hint_when_disabled": {
+    "description": "未开启自动解析时回复提示",
+    "type": "bool",
+    "default": false,
+    "hint": "会话里出现 X 链接但没开自动解析时，回一句「发 /开启解析 开启」。默认关闭，避免群聊刷屏。"
+  },
   "send_audio": {
     "description": "发送音频（MP3）",
     "type": "bool",

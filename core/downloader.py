@@ -95,6 +95,7 @@ class Downloader:
         filename: str | None = None,
         max_bytes: int | None = None,
         use_cache: bool = True,
+        timeout: float | None = None,
     ) -> Media:
         """下载一个媒体 URL 到 base_dir/<subdir>/。
 
@@ -106,6 +107,7 @@ class Downloader:
             filename: 指定文件名（含扩展名），默认按内容自动生成
             max_bytes: 本次下载的大小上限，默认用实例的 max_bytes
             use_cache: 同一 URL 在本进程内只下一次（多条消息重复发同一个链接时省流量）
+            timeout: 本次下载的超时（秒），默认用实例的 timeout；封面这类可选内容给个短值
 
         Raises:
             DownloadException: 网络异常、HTTP 错误、超过大小上限
@@ -127,7 +129,7 @@ class Downloader:
                     headers=headers,
                     proxy=self.proxy,
                     allow_redirects=True,
-                    timeout=aiohttp.ClientTimeout(total=self.timeout),
+                    timeout=aiohttp.ClientTimeout(total=timeout or self.timeout),
                 ) as resp:
                     if resp.status >= 400:
                         raise DownloadException(f"HTTP {resp.status} {resp.reason}")

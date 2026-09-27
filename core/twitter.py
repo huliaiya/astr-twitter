@@ -274,6 +274,20 @@ def format_media_info(result: "ParseResult", *, emoji: bool = False) -> str:
     return " ＋ ".join(parts)
 
 
+def format_elapsed(seconds: float) -> str:
+    """把耗时格式化成给人看的样子：0.8s / 12.3s / 1m05s。"""
+    try:
+        seconds = max(0.0, float(seconds))
+    except (TypeError, ValueError):
+        return "-"
+    if seconds < 10:
+        return f"{seconds:.1f}s"
+    if seconds < 60:
+        return f"{seconds:.0f}s"
+    minutes, rest = divmod(int(seconds), 60)
+    return f"{minutes}m{rest:02d}s"
+
+
 def build_caption(
     result: "ParseResult",
     *,
@@ -283,9 +297,14 @@ def build_caption(
     include_link: bool = False,
     emoji: bool = False,
     max_chars: int = 300,
+    elapsed: float | None = None,
+    show_elapsed: bool = False,
 ) -> str:
-    """拼发送用的简介：作者、媒体信息、正文、链接（都可单独关闭）。"""
+    """拼发送用的简介：解析耗时、作者、媒体信息、正文、链接（都可单独关闭）。"""
     lines: list[str] = []
+
+    if show_elapsed and elapsed is not None:
+        lines.append(f"{'⏱ ' if emoji else ''}解析耗时 {format_elapsed(elapsed)}")
 
     if include_author:
         handle = (result.author_handle or "").lstrip("@")

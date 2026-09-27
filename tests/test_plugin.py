@@ -66,6 +66,7 @@ def make_event(
     self_id: str = "99999",
     session_id: str = "session-1",
     extra_components: list | None = None,
+    platform_id: str = "fake-1",
 ) -> AstrMessageEvent:
     """构造一条真实的 AstrBot 消息事件。"""
     msg = AstrBotMessage()
@@ -80,7 +81,7 @@ def make_event(
     return AstrMessageEvent(
         message_str=text,
         message_obj=msg,
-        platform_meta=PlatformMetadata("fake", "fake platform", "fake-1"),
+        platform_meta=PlatformMetadata("fake", "fake platform", platform_id),
         session_id=session_id,
     )
 
@@ -648,7 +649,10 @@ async def test_handle_url_caption_and_cover(plugin_module, plugin, tmp_path, mon
 
     texts = [c.text for c in segments if isinstance(c, plugin_module.Comp.Plain)]
     caption = texts[0]
-    assert caption.startswith("作者：@Fortnite"), caption
+    # 简介顶部是解析耗时，之后才是作者与媒体信息
+    first_line, _, rest = caption.partition("\n")
+    assert first_line.startswith("解析耗时 "), caption
+    assert rest.startswith("作者：@Fortnite"), caption
     assert "视频 · 720p · 0:07" in caption
     assert "Lucky" in caption
     assert URL_VIDEO not in caption, "默认不带链接"
@@ -790,7 +794,9 @@ async def test_send_chain_falls_back(plugin_module, plugin):
 
     event2.chain_result = always_fail  # type: ignore[method-assign]
     items2 = [item async for item in plugin._send_chain(event2, segments, "https://x.com/a/status/1")]
-    assert items2 and items2[-1].chain[0].text == "https://x.com/a/status/1"
+    final = items2[-1].chain[0].text
+    assert "hi" in final, "彻底发不出去时也要保住简介文字"
+    assert final.rstrip().endswith("https://x.com/a/status/1")
 
 
 @live
@@ -820,3 +826,178 @@ def test_names_are_x_not_twitter(plugin_module):
     assert "display_name: X 解析" in metadata
     assert "推特" not in metadata.replace("/X解析", "")
     assert plugin_module.PLUGIN_ID == "astrbot_plugin_twitter", "安装目录/路由前缀不能改，否则升级会重复安装"
+
+
+async def test_quote_unsupported_platform_is_remembered(plugin_module, plugin):
+    """带引用发失败的平台会被记住，之后不再重复尝试（省一次失败往返）。"""
+    from astrbot.api.message_components import Plain
+
+    segments = [Plain(text="hi")]
+    event = make_event("x")
+    original = event.chain_result
+
+    def fail_once(chain):
+        if any(type(c).__name__ == "Reply" for c in chain):
+            raise RuntimeError("平台不支持引用")
+        return original(chain)
+
+    event.chain_result = fail_once  # type: ignore[method-assign]
+    [item async for item in plugin._send_chain(event, segments, "https://x.com/a/status/1")]
+    assert plugin._quote_unsupported, "应当记下这个平台"
+    assert plugin._with_quote(event, segments) is segments, "下次不再加引用"
+
+    # 其它平台不受影响
+    other = make_event("x", platform_id="fake-2")
+    assert type(plugin._with_quote(other, segments)[0]).__name__ == "Reply"
+
+
+async def test_handle_url_cover_gets_short_timeout(plugin_module, plugin, tmp_path, monkeypatch):
+    """封面下载要带短超时，不能拖着视频一起等。"""
+
+    async def fake_parse(*args, **kwargs):
+        return _fake_result()
+
+    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    downloader = FakeDownloader(tmp_path)
+    plugin._downloader = downloader
+    plugin.settings.send_cover = True
+    plugin.settings.timeout = 30.0
+
+    await plugin._handle_url(make_event("x"), URL_VIDEO, notify_error=False)
+
+    timeouts = [kwargs.get("timeout") for _, kwargs in downloader.calls]
+    assert plugin_module.COVER_TIMEOUT in timeouts, f"封面应带短超时：{downloader.calls}"
+    assert timeouts[0] == plugin_module.COVER_TIMEOUT, "封面是第一个下载项"
+    assert None in timeouts, "普通媒体不要被短超时限制"
+
+
+async def test_show_elapsed_can_be_disabled(plugin_module, plugin, tmp_path, monkeypatch):
+    async def fake_parse(*args, **kwargs):
+        return _fake_result()
+
+    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    plugin._downloader = FakeDownloader(tmp_path)
+    plugin.settings.show_elapsed = False
+
+    segments = await plugin._handle_url(make_event("x"), URL_VIDEO, notify_error=False)
+    caption = next(c.text for c in segments if isinstance(c, plugin_module.Comp.Plain))
+    assert caption.startswith("作者："), caption
+
+
+async def test_hint_when_disabled(plugin_module, plugin):
+    """本会话没开自动解析时：默认静默，开了提示才回话。"""
+    plugin.settings.auto_parse_default = False
+    plugin.settings.hint_when_disabled = False
+    replies: list[str] = []
+
+    async def fake_send(result):
+        replies.append(result.chain[0].text)
+
+    event = make_event(f"看 {URL_PHOTO}")
+    event.send = fake_send  # type: ignore[method-assign]
+    assert await collect(plugin.on_message(event)) == []
+    assert replies == [], "默认不该打扰"
+
+    plugin.settings.hint_when_disabled = True
+    event2 = make_event(f"看 {URL_PHOTO}", session_id="s-2")
+    event2.send = fake_send  # type: ignore[method-assign]
+    await collect(plugin.on_message(event2))
+    assert replies and "/开启解析" in replies[0], replies
+
+
+async def test_status_shows_session_id_and_hint(plugin_module, plugin):
+    """未开启时状态里要写清会话 ID 和开启方式（排查「群里怎么不解析」用）。"""
+    plugin.settings.auto_parse_default = False
+    results = await collect(plugin.cmd_status(make_event("/解析状态", session_id="s-9")))
+    text = results[0].chain[0].text
+    assert "本会话 ID" in text and "s-9" in text
+    assert "不自动解析" in text and "/开启解析" in text
+    assert "简介显示解析耗时" in text
+
+    # 已开启的会话不再提示开启方式
+    enabled = await collect(plugin.cmd_enable(make_event("/开启解析", session_id="s-9")))
+    assert enabled
+    text2 = (await collect(plugin.cmd_status(make_event("/解析状态", session_id="s-9"))))[0].chain[0].text
+    assert "自动解析中" in text2 and "/开启解析" not in text2.split("本会话 ID")[1]
+
+
+# --------------------------------------------------------------------------- #
+# 分段回复：简介单独发、媒体自己带引用
+# --------------------------------------------------------------------------- #
+def _enable_segmented(context, *, enable: bool, only_llm: bool = False) -> None:
+    context.get_config = lambda: {  # type: ignore[method-assign]
+        "platform_settings": {
+            "segmented_reply": {"enable": enable, "only_llm_result": only_llm}
+        }
+    }
+
+
+def test_split_caption_keeps_first_plain(plugin_module, plugin):
+    from astrbot.api.message_components import Image, Plain
+
+    caption, media = plugin._split_caption(
+        [Plain(text="简介"), Image.fromFileSystem("/tmp/a.jpg"), Plain(text="链接")]
+    )
+    assert len(caption) == 1 and caption[0].text == "简介"
+    assert len(media) == 2, "封面/媒体/兜底链接都留在媒体侧"
+
+
+async def test_segmented_reply_sends_caption_separately(plugin_module, plugin):
+    """开了分段回复时：简介单独一条，媒体那条自己带引用（引用不会丢）。"""
+    from astrbot.api.message_components import Plain, Video
+
+    _enable_segmented(plugin.context, enable=True)
+    plugin._segmented_cache = None
+    event = make_event("x")
+    segments = [Plain(text="作者：@a\n"), Video.fromFileSystem(path="/tmp/fake.mp4")]
+
+    chains = []
+    original = event.chain_result
+
+    def record(chain):
+        chains.append(list(chain))
+        return original(chain)
+
+    event.chain_result = record  # type: ignore[method-assign]
+    [item async for item in plugin._send_chain(event, segments, "https://x.com/a/status/1")]
+
+    assert len(chains) == 2, [c for c in chains]
+    assert [type(c).__name__ for c in chains[0]] == ["Plain"], "第一条只发简介"
+    assert [type(c).__name__ for c in chains[1]] == ["Reply", "Video"], "媒体那条带引用"
+
+
+async def test_segmented_reply_off_keeps_single_chain(plugin_module, plugin):
+    from astrbot.api.message_components import Plain, Video
+
+    _enable_segmented(plugin.context, enable=False)
+    plugin._segmented_cache = None
+    event = make_event("x")
+    segments = [Plain(text="作者：@a\n"), Video.fromFileSystem(path="/tmp/fake.mp4")]
+
+    chains = []
+    original = event.chain_result
+
+    def record(chain):
+        chains.append(list(chain))
+        return original(chain)
+
+    event.chain_result = record  # type: ignore[method-assign]
+    [item async for item in plugin._send_chain(event, segments, "https://x.com/a/status/1")]
+    assert len(chains) == 1
+    assert [type(c).__name__ for c in chains[0]] == ["Reply", "Plain", "Video"]
+
+
+async def test_segmented_only_llm_result_does_not_split(plugin_module, plugin):
+    """只对 LLM 结果分段时，插件结果不会被拆开。"""
+    _enable_segmented(plugin.context, enable=True, only_llm=True)
+    plugin._segmented_cache = None
+    assert plugin._segmented_reply_enabled() is False
+
+
+def test_reply_carries_sender(plugin_module, plugin):
+    from astrbot.api.message_components import Plain
+
+    reply = plugin._with_quote(make_event("x"), [Plain(text="hi")])[0]
+    assert str(reply.id) == "message-1"
+    assert str(reply.sender_id) == "10001", "AstrBot 校验 Reply 有效性要求 sender_id"
+    assert reply.sender_nickname == "tester"

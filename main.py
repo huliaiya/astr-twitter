@@ -61,6 +61,9 @@ KV_GLOBAL_AUTO_PARSE = "global_auto_parse"
 
 TRIGGER_MODES = ("all", "at", "command_only")
 
+# 封面下载的硬超时（秒）：封面宁可没有，也不能拖慢主体的发送
+COVER_TIMEOUT = 6.0
+
 
 
 # --------------------------------------------------------------------------- #
@@ -86,6 +89,8 @@ class Settings:
     caption_emoji: bool = False
     send_cover: bool = False
     quote_reply: bool = True  # 解析结果引用触发它的那条消息
+    show_elapsed: bool = True  # 简介顶部显示解析耗时
+    hint_when_disabled: bool = False  # 未开启自动解析时回一句提示
     send_audio: bool = False
     parse_quoted: bool = False
     keep_files: bool = False
@@ -148,6 +153,8 @@ class Settings:
             send_link=as_bool("send_link", False),
             caption_emoji=as_bool("caption_emoji", False),
             send_cover=as_bool("send_cover", False),
+            show_elapsed=as_bool("show_elapsed", True),
+            hint_when_disabled=as_bool("hint_when_disabled", False),
             quote_reply=as_bool("quote_reply", True),
             send_audio=as_bool("send_audio", False),
             parse_quoted=as_bool("parse_quoted", False),
@@ -196,6 +203,9 @@ class TwitterPlugin(Star):
         self._global_auto_parse: bool | None = None
         self._policy_loaded = False
         self._recent: dict[str, float] = {}
+        # 记住哪些平台不接受「引用 + 媒体」，避免每次解析都多一次失败往返
+        self._quote_unsupported: set[str] = set()
+        self._segmented_cache: bool | None = None
         # 待清理的临时文件（发送完成后删除）
         self._pending_files: list[Path] = []
         # 解析历史（WebUI 页面用）
@@ -430,20 +440,100 @@ class TwitterPlugin(Star):
         """
         if not self.settings.quote_reply or Comp is None or not segments:
             return segments
+        if self._platform_key(event) in self._quote_unsupported:
+            return segments
         reply_cls = getattr(Comp, "Reply", None)
         if reply_cls is None:  # 老版本 AstrBot 没有 Reply 组件
             return segments
         message_id = getattr(getattr(event, "message_obj", None), "message_id", None)
         if not message_id:
             return segments
+        # AstrBot 的 respond 阶段校验 Reply 是否有效时要求 id 与 sender_id 都在
+        fields: dict[str, Any] = {"id": message_id}
         try:
-            return [reply_cls(id=message_id), *segments]
+            sender_id = event.get_sender_id()
+            if sender_id:
+                fields["sender_id"] = sender_id
+            sender_name = event.get_sender_name()
+            if sender_name:
+                fields["sender_nickname"] = sender_name
+        except Exception:  # noqa: BLE001
+            pass
+        try:
+            return [reply_cls(**fields), *segments]
         except Exception as e:  # noqa: BLE001
             logger.debug(f"[{PLUGIN_NAME}] 构造引用回复失败，改为普通发送: {e}")
             return segments
 
+    def _platform_key(self, event: AstrMessageEvent) -> str:
+        """平台标识，用于记住「这个平台不接受带引用的媒体消息」。"""
+        try:
+            return str(event.get_platform_id() or event.get_platform_name() or "")
+        except Exception:  # noqa: BLE001
+            return ""
+
+    def _segmented_reply_enabled(self) -> bool:
+        """AstrBot 开了「分段回复」吗？
+
+        开了的话 respond 阶段会把消息链拆成一个个组件单独发送，而且 Reply 只会
+        挂在第一条上（`header_comps.clear()`），媒体那条就丢掉引用了；组件之间的
+        间隔（默认 1.5~3.5 秒）也会让「发完视频」明显变慢。
+        所以这种情况下我们主动把简介单独发，媒体自己带引用。
+        """
+        if self._segmented_cache is None:
+            enabled = False
+            try:
+                config = self.context.get_config()
+                settings = config.get("platform_settings", {}).get("segmented_reply", {})
+                enabled = bool(settings.get("enable")) and not bool(
+                    settings.get("only_llm_result", True)
+                )
+            except Exception:  # noqa: BLE001 - 读不到就按没开处理
+                enabled = False
+            self._segmented_cache = enabled
+            if enabled:
+                logger.info(
+                    f"[{PLUGIN_NAME}] 检测到 AstrBot 开启了分段回复：简介将单独发送，"
+                    "媒体消息单独带引用，避免引用被分段逻辑丢掉"
+                )
+        return self._segmented_cache
+
+    @staticmethod
+    def _split_caption(segments: list[Any]) -> tuple[list[Any], list[Any]]:
+        """把首个纯文本段（简介）与其他媒体段分开。"""
+        caption: list[Any] = []
+        media: list[Any] = []
+        for segment in segments:
+            if not caption and not media and type(segment).__name__ == "Plain":
+                caption.append(segment)
+            else:
+                media.append(segment)
+        return caption, media
+
     async def _send_chain(self, event: AstrMessageEvent, segments: list[Any], url: str):
-        """发送媒体链：先带引用发，失败再退到不带引用，最后退到纯链接。"""
+        """发送媒体链：先带引用发，失败再退到不带引用，最后退到「简介 + 链接」。
+
+        带引用发送失败（一般是个别平台不支持引用 + 媒体）时会记到
+        self._quote_unsupported 里，同一平台之后不再重复试，省掉一次失败往返。
+        """
+        platform = self._platform_key(event)
+
+        # 分段回复场景：简介先单独发一条，媒体再自己带引用发
+        caption_segments, media_segments = self._split_caption(segments)
+        caption_sent = False
+        if self._segmented_reply_enabled() and caption_segments and media_segments:
+            try:
+                yield event.chain_result(caption_segments)
+                caption_sent = True
+            except Exception as e:  # noqa: BLE001
+                logger.warning(f"[{PLUGIN_NAME}] 简介单独发送失败: {e}")
+            segments = media_segments
+
+        logger.info(
+            f"[{PLUGIN_NAME}] 发送解析结果：平台={platform or '未知'} "
+            f"组件={[type(c).__name__ for c in segments]}"
+        )
+
         attempts: list[list[Any]] = []
         quoted = self._with_quote(event, segments)
         if quoted is not segments:
@@ -454,9 +544,30 @@ class TwitterPlugin(Star):
                 yield event.chain_result(chain)
                 return
             except Exception as e:  # noqa: BLE001 - 个别平台不支持视频/引用
-                label = "（带引用）" if index == 0 and len(attempts) > 1 else ""
-                logger.warning(f"[{PLUGIN_NAME}] 发送失败{label}: {e}")
-        yield event.plain_result(url)
+                if index == 0 and len(attempts) > 1:
+                    logger.warning(f"[{PLUGIN_NAME}] 带引用发送失败，改为普通发送: {e}")
+                    if platform:
+                        self._quote_unsupported.add(platform)
+                        logger.info(
+                            f"[{PLUGIN_NAME}] 平台 {platform} 不支持带引用的媒体消息，"
+                            "本次运行内后续解析不再尝试引用"
+                        )
+                else:
+                    logger.warning(f"[{PLUGIN_NAME}] 发送失败: {e}")
+        # 媒体彻底发不出去：退回「简介 + 直链」，至少别把作者/正文信息丢掉
+        # （简介已经单独发过就不重复了）
+        fallback = "" if caption_sent else self._plain_text_of(segments)
+        yield event.plain_result(f"{fallback}{url}" if fallback else url)
+
+    @staticmethod
+    def _plain_text_of(segments: list[Any]) -> str:
+        """把消息段里的纯文本拼起来（用于发送失败时的兜底）。"""
+        parts: list[str] = []
+        for segment in segments:
+            text = getattr(segment, "text", None)
+            if isinstance(text, str) and text:
+                parts.append(text.rstrip("\n"))
+        return "\n".join(parts) + "\n" if parts else ""
 
     @staticmethod
     async def _reply(event: AstrMessageEvent, text: str) -> None:
@@ -473,12 +584,15 @@ class TwitterPlugin(Star):
         *,
         notify_error: bool,
         depth: int = 0,
+        started: float | None = None,
     ) -> list[Any] | None:
         """解析单个链接并下载媒体，返回待发送的消息段；失败返回 None。
 
         depth 用于「引用/转发原推」的一层递归（depth=1 时不再继续）。
+        started 是收到消息的时间戳，用来算「解析耗时」（含解析 + 下载）。
         """
         settings = self.settings
+        started = time.monotonic() if started is None else started
         if Comp is None:  # pragma: no cover - 正常情况下一定可用
             logger.error(f"[{PLUGIN_NAME}] message_components 不可用，无法发送媒体")
             return None
@@ -506,19 +620,6 @@ class TwitterPlugin(Star):
 
         segments: list[Any] = []
 
-        # 简介：作者 / 媒体信息（类型·分辨率·时长）/ 正文 / 链接，可分别开关
-        caption = build_caption(
-            result,
-            include_text=settings.send_title,
-            include_author=settings.send_author,
-            include_media_info=settings.send_media_info,
-            include_link=settings.send_link,
-            emoji=settings.caption_emoji,
-            max_chars=settings.max_title_chars,
-        )
-        if caption:
-            segments.append(Comp.Plain(caption + "\n"))
-
         # 多图推文并行下载（带并发上限），边下边校验大小
         wanted = [item for item in contents if item.type != "audio" or settings.send_audio]
 
@@ -540,6 +641,8 @@ class TwitterPlugin(Star):
                     {
                         "subdir": result.tweet_id or "unknown",
                         "filename": item.filename,
+                        # 封面只是锦上添花：给个短超时，别让它拖着视频一起等
+                        **({"timeout": min(settings.timeout, COVER_TIMEOUT)} if item is cover_item else {}),
                     },
                 )
                 for item in batch
@@ -586,6 +689,21 @@ class TwitterPlugin(Star):
         # 封面放最前面（像缩略图预览），其余媒体随后
         segments.extend(cover_segments)
         segments.extend(media_segments)
+
+        # 简介（作者 / 媒体信息 / 正文）最后拼：这样「解析耗时」才能包含下载时间
+        caption = build_caption(
+            result,
+            include_text=settings.send_title,
+            include_author=settings.send_author,
+            include_media_info=settings.send_media_info,
+            include_link=settings.send_link,
+            emoji=settings.caption_emoji,
+            max_chars=settings.max_title_chars,
+            elapsed=time.monotonic() - started,
+            show_elapsed=settings.show_elapsed,
+        )
+        if caption:
+            segments.insert(0, Comp.Plain(caption + "\n"))
 
         await self._record_success(event, result, downloaded, total_bytes)
 
@@ -672,6 +790,7 @@ class TwitterPlugin(Star):
     async def on_message(self, event: AstrMessageEvent):
         """监听所有消息，发现 X 链接就解析并发送媒体。"""
         settings = self.settings
+        started = time.monotonic()
         if not settings.enabled or not settings.auto_parse:
             return
 
@@ -694,14 +813,20 @@ class TwitterPlugin(Star):
             return
 
         # 会话 / 全局开关：默认策略为「需先发 /开启解析」
+        urls = extract_urls(text)
+        if not urls:
+            return
+
         await self._ensure_policy()
         allowed, source = self._effective_auto_parse(event.unified_msg_origin)
         if not allowed:
-            logger.debug(f"[{PLUGIN_NAME}] 本会话未开启自动解析（{source}），跳过")
-            return
-
-        urls = extract_urls(text)
-        if not urls:
+            # 有人确实发了链接，只是本会话没开——这种情况值得留一条 INFO，方便排查
+            logger.info(
+                f"[{PLUGIN_NAME}] 发现 X 链接但本会话未开启自动解析（{source}）；"
+                f"发 /开启解析 即可开启，或直接用 /解析 <链接>。会话：{event.unified_msg_origin}"
+            )
+            if settings.hint_when_disabled:
+                await self._reply(event, "本会话未开启 X 自动解析，发 /开启解析 开启，或直接用 /解析 <链接>")
             return
 
         handled = False
@@ -710,7 +835,9 @@ class TwitterPlugin(Star):
             if self._debounced(tweet_id):
                 logger.debug(f"[{PLUGIN_NAME}] 防抖命中，跳过 {tweet_id}")
                 continue
-            segments = await self._handle_url(event, url, notify_error=settings.notify_error)
+            segments = await self._handle_url(
+                event, url, notify_error=settings.notify_error, started=started
+            )
             if not segments:
                 continue
             handled = True
@@ -728,6 +855,7 @@ class TwitterPlugin(Star):
     @filter.command("解析", alias={"X解析", "x解析", "tw", "推特解析"})
     async def cmd_parse(self, event: AstrMessageEvent):
         """解析 X 链接并把媒体发到当前会话：/解析 <链接>"""
+        started = time.monotonic()
         urls = extract_urls(self._collect_text(event))
         if not urls:
             yield event.plain_result("用法：/解析 <X 链接>")
@@ -735,7 +863,7 @@ class TwitterPlugin(Star):
 
         sent = 0
         for url in urls[: self.settings.max_links]:
-            segments = await self._handle_url(event, url, notify_error=True)
+            segments = await self._handle_url(event, url, notify_error=True, started=started)
             if segments:
                 sent += 1
                 async for item in self._send_chain(event, segments, url):
@@ -821,6 +949,11 @@ class TwitterPlugin(Star):
             "at": "需要 @机器人",
             "command_only": "只用指令/LLM 工具",
         }.get(s.trigger_mode, s.trigger_mode)
+        hint = (
+            ""
+            if allowed
+            else "- 开启方式：发 /开启解析（只影响本会话），或 /开启解析 全局\n"
+        )
         yield event.plain_result(
             "astr-twitter 状态：\n"
             f"- 插件总开关：{'开' if s.enabled else '关'}\n"
@@ -829,6 +962,10 @@ class TwitterPlugin(Star):
             f"- 全局开关：{global_text}\n"
             f"- 默认策略：{'开启' if s.auto_parse_default else '关闭（需先 /开启解析）'}\n"
             f"- 本会话：{'自动解析中' if allowed else '不自动解析'}（来源：{source}）\n"
+            f"- 本会话 ID：{event.unified_msg_origin}\n"
+            f"{hint}"
+            f"- 简介显示解析耗时：{'开' if s.show_elapsed else '关'}\n"
+            f"- 引用回复：{'开' if s.quote_reply else '关'}\n"
             f"- 后备接口：{'开' if s.fallback_syndication else '关'}\n"
             f"- 接口：{s.api_endpoint}\n"
             f"- 代理：{s.proxy or '未设置'}"
@@ -843,7 +980,8 @@ class TwitterPlugin(Star):
         Args:
             url(string): 要解析的 X/Twitter 状态链接，例如 https://x.com/user/status/123
         """
-        segments = await self._handle_url(event, url, notify_error=False)
+        started = time.monotonic()
+        segments = await self._handle_url(event, url, notify_error=False, started=started)
         if not segments:
             yield event.plain_result(f"未能解析该链接：{url}")
             return

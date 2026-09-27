@@ -15,6 +15,8 @@ devtools/
 ├─ twitter_cli.py                # Python CLI，直接调用插件 core 层（推荐用这个调试）
 ├─ make_logo.py                  # 用标准库把官方 X 字形栅格化成 logo.png（可 --preview 预览）
 ├─ vendor/x-logo.svg             # 官方 X 标志矢量路径（simple-icons，来源留档）
+├─ test-page.mjs                 # 页面自检：DOM 桩 + 桥接协议，验证加载顺序与响应解包
+├─ bridge-stub.js                # 桥接 SDK 的协议桩（没有 AstrBot 时用它跑页面自检）
 └─ fixtures/                     # 离线回归用 xdown 返回 HTML 快照（Node 与 pytest 共用）
 ```
 
