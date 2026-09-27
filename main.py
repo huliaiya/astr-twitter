@@ -511,12 +511,15 @@ class TwitterPlugin(Star):
         return caption, media
 
     async def _send_chain(self, event: AstrMessageEvent, segments: list[Any], url: str):
-        """发送媒体链：先带引用发，失败再退到不带引用，最后退到「简介 + 链接」。
+        """发送媒体链：先带引用发，失败再退到不带引用，最后退到「完整简介 + 链接」。
 
         带引用发送失败（一般是个别平台不支持引用 + 媒体）时会记到
         self._quote_unsupported 里，同一平台之后不再重复试，省掉一次失败往返。
         """
         platform = self._platform_key(event)
+
+        # 先把完整的纯文本（简介）存下来，作为最后兜底（防止分段回复/异常吞掉）
+        full_caption_text = self._plain_text_of(segments).rstrip("\n")
 
         # 分段回复场景：简介先单独发一条，媒体再自己带引用发
         caption_segments, media_segments = self._split_caption(segments)
@@ -531,7 +534,7 @@ class TwitterPlugin(Star):
 
         logger.info(
             f"[{PLUGIN_NAME}] 发送解析结果：平台={platform or '未知'} "
-            f"组件={[type(c).__name__ for c in segments]}"
+            f"组件={[type(c).__name__ for c in segments]} caption_sent={caption_sent}"
         )
 
         attempts: list[list[Any]] = []
@@ -554,9 +557,9 @@ class TwitterPlugin(Star):
                         )
                 else:
                     logger.warning(f"[{PLUGIN_NAME}] 发送失败: {e}")
-        # 媒体彻底发不出去：退回「简介 + 直链」，至少别把作者/正文信息丢掉
-        # （简介已经单独发过就不重复了）
-        fallback = "" if caption_sent else self._plain_text_of(segments)
+        # 媒体彻底发不出去：退回「完整简介 + 直链」，至少别把作者/正文信息丢掉
+        # caption_sent=True 时说明简介已单独发出，兜底只需补链接即可
+        fallback = "" if caption_sent else full_caption_text
         yield event.plain_result(f"{fallback}{url}" if fallback else url)
 
     @staticmethod
@@ -704,6 +707,13 @@ class TwitterPlugin(Star):
         )
         if caption:
             segments.insert(0, Comp.Plain(caption + "\n"))
+
+        # 关键诊断：把即将发送的组件类型与简介首行记下来，排查 TG 私聊丢字段
+        first_line = caption.split("\n")[0] if caption else "(无简介)"
+        logger.info(
+            f"[{PLUGIN_NAME}] 准备发送：平台={self._platform_key(event) or 'unknown'} "
+            f"组件={[type(c).__name__ for c in segments]} 首行={first_line!r}"
+        )
 
         await self._record_success(event, result, downloaded, total_bytes)
 
