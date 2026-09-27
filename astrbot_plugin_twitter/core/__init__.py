@@ -28,6 +28,9 @@ from .twitter import (
     truncate,
 )
 
+# 触发模式有效值（供配置验证与 WebUI 使用）
+TRIGGER_MODES = ("all", "at", "command_only")
+
 __all__ = [
     "DEFAULT_ENDPOINT",
     "DEFAULT_ORIGIN",
@@ -58,4 +61,5 @@ __all__ = [
     "search_url",
     "syndication_token",
     "truncate",
+    "TRIGGER_MODES",
 ]
