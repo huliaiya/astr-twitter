@@ -91,6 +91,7 @@ class Settings:
     quote_reply: bool = True  # 解析结果引用触发它的那条消息
     show_elapsed: bool = True  # 简介顶部显示解析耗时
     hint_when_disabled: bool = False  # 未开启自动解析时回一句提示
+    show_parsing_hint: bool = True  # 解析前先回「正在解析中...」
     send_audio: bool = False
     parse_quoted: bool = False
     keep_files: bool = False
@@ -155,6 +156,7 @@ class Settings:
             send_cover=as_bool("send_cover", False),
             show_elapsed=as_bool("show_elapsed", True),
             hint_when_disabled=as_bool("hint_when_disabled", False),
+            show_parsing_hint=as_bool("show_parsing_hint", True),
             quote_reply=as_bool("quote_reply", True),
             send_audio=as_bool("send_audio", False),
             parse_quoted=as_bool("parse_quoted", False),
@@ -596,6 +598,14 @@ class TwitterPlugin(Star):
         """
         settings = self.settings
         started = time.monotonic() if started is None else started
+
+        # 解析前提示：识别平台为 X，正在解析中...
+        if settings.show_parsing_hint and notify_error:
+            try:
+                await event.send(event.plain_result("🔎 识别平台为 X，正在解析中..."))
+            except Exception:  # noqa: BLE001 - 提示发送失败不影响主流程
+                pass
+
         if Comp is None:  # pragma: no cover - 正常情况下一定可用
             logger.error(f"[{PLUGIN_NAME}] message_components 不可用，无法发送媒体")
             return None

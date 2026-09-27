@@ -106,6 +106,12 @@
     "default": true,
     "hint": "在最顶上显示「解析耗时 x.xs」，包含解析接口 + 下载媒体的总时间。"
   },
+  "show_parsing_hint": {
+    "description": "解析前先回「正在解析中...」提示",
+    "type": "bool",
+    "default": true,
+    "hint": "发链接/用指令解析前，先回一条「识别平台为 X，正在解析中...」"
+  },
   "hint_when_disabled": {
     "description": "未开启自动解析时回复提示",
     "type": "bool",

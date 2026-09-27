@@ -13,6 +13,7 @@
         --card: #f7f8fa;
         --accent: #1d9bf0;
         --danger: #ef4444;
+        --ok: #10b981;
       }
       html[data-theme="dark"] {
         --bg: #16181c;
@@ -24,78 +25,104 @@
       * { box-sizing: border-box; }
       body {
         margin: 0;
-        padding: 16px 18px 40px;
+        padding: 14px 14px 40px;
         background: var(--bg);
         color: var(--fg);
-        font: 14px/1.6 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+        font: 14px/1.55 -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
           "Microsoft YaHei", sans-serif;
       }
-      header { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
-      h1 { font-size: 18px; margin: 0; }
+      header { display: flex; align-items: center; gap: 10px; flex-wrap: wrap; margin-bottom: 10px; }
+      h1 { font-size: 17px; margin: 0; }
       .grow { flex: 1; }
+      .header-btns { display: flex; gap: 6px; }
       button {
         border: 1px solid var(--line);
         background: var(--card);
         color: var(--fg);
         border-radius: 8px;
-        padding: 6px 12px;
+        padding: 7px 12px;
         cursor: pointer;
-        font-size: 13px;
+        font-size: 12px;
+        white-space: nowrap;
       }
       button:hover { border-color: var(--accent); color: var(--accent); }
       button.danger:hover { border-color: var(--danger); color: var(--danger); }
-      .cards { display: flex; gap: 10px; flex-wrap: wrap; margin: 14px 0 8px; }
-      .card {
+      .stats-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(100px, 1fr)); gap: 8px; margin: 10px 0 8px; }
+      .stat-card {
         background: var(--card);
         border: 1px solid var(--line);
         border-radius: 10px;
-        padding: 10px 14px;
-        min-width: 108px;
+        padding: 10px 12px;
       }
-      .card .k { color: var(--muted); font-size: 12px; }
-      .card .v { font-size: 19px; font-weight: 600; margin-top: 2px; }
-      .meta { color: var(--muted); font-size: 12px; margin: 8px 0 12px; }
-      table { width: 100%; border-collapse: collapse; }
-      th, td { text-align: left; padding: 7px 8px; border-bottom: 1px solid var(--line); vertical-align: top; }
-      th { color: var(--muted); font-weight: 500; font-size: 12px; }
-      td.url { max-width: 330px; word-break: break-all; }
-      a { color: var(--accent); text-decoration: none; }
-      a:hover { text-decoration: underline; }
-      .ok { color: #10b981; }
-      .bad { color: var(--danger); }
+      .stat-card .k { color: var(--muted); font-size: 11px; }
+      .stat-card .v { font-size: 18px; font-weight: 600; margin-top: 2px; }
+      .stat-card .v.ok { color: var(--ok); }
+      .stat-card .v.bad { color: var(--danger); }
+      .stat-card .v.accent { color: var(--accent); }
+
+      .records-list { display: flex; flex-direction: column; gap: 8px; }
+      .record-card {
+        background: var(--card);
+        border: 1px solid var(--line);
+        border-radius: 12px;
+        overflow: hidden;
+      }
+      .record-header {
+        display: flex; align-items: center; gap: 10px;
+        padding: 12px 14px;
+        cursor: pointer;
+        user-select: none;
+      }
+      .record-header:active { background: var(--line); }
+      .status-badge {
+        width: 28px; height: 28px; border-radius: 6px; flex-shrink: 0;
+        display: flex; align-items: center; justify-content: center;
+        font-size: 14px;
+      }
+      .status-badge.ok { background: rgba(16,185,129,.15); color: var(--ok); }
+      .status-badge.bad { background: rgba(239,68,68,.15); color: var(--danger); }
+      .record-main { flex: 1; min-width: 0; }
+      .record-time { font-size: 13px; color: var(--muted); }
+      .record-url { font-size: 13px; color: var(--accent); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; margin-top: 2px; }
+      .expand-icon { color: var(--muted); font-size: 18px; transition: transform .15s; flex-shrink: 0; }
+      .record-card.expanded .expand-icon { transform: rotate(180deg); }
+      .record-details {
+        max-height: 0; overflow: hidden;
+        background: var(--bg);
+        border-top: 1px solid var(--line);
+        transition: max-height .25s ease, padding .15s ease;
+      }
+      .record-card.expanded .record-details { max-height: 800px; padding: 12px 14px; }
+      .detail-row { display: flex; gap: 10px; margin-bottom: 8px; font-size: 13px; }
+      .detail-row:last-child { margin-bottom: 0; }
+      .detail-label { color: var(--muted); min-width: 64px; flex-shrink: 0; }
+      .detail-value { color: var(--fg); word-break: break-all; flex: 1; }
+      .detail-value a { color: var(--accent); }
       .pill {
-        display: inline-block; padding: 1px 7px; margin-right: 4px;
+        display: inline-block; padding: 2px 8px; margin: 0 4px 4px 0;
         border: 1px solid var(--line); border-radius: 999px;
-        font-size: 11px; color: var(--muted);
+        font-size: 11px; color: var(--muted); background: var(--card);
       }
-      .empty { color: var(--muted); padding: 26px 4px; text-align: center; }
+      .pills { display: flex; flex-wrap: wrap; gap: 4px; }
+      .empty { color: var(--muted); padding: 32px 12px; text-align: center; font-size: 13px; }
       .hide { display: none; }
     </style>
   </head>
   <body>
     <header>
       <h1 id="title">X 解析历史</h1>
-      <span class="grow"></span>
-      <button id="refresh">刷新</button>
-      <button id="clear" class="danger">清空</button>
+      <div class="grow"></div>
+      <div class="header-btns">
+        <button id="refresh">刷新</button>
+        <button id="clear" class="danger">清空</button>
+      </div>
     </header>
 
-    <div class="cards" id="cards"></div>
-    <div class="meta" id="meta"></div>
+    <div class="stats-grid" id="cards"></div>
+    <div class="meta" id="meta" style="font-size:12px;color:var(--muted);margin-bottom:8px;"></div>
 
-    <table>
-      <thead>
-        <tr>
-          <th style="width: 150px">时间</th>
-          <th style="width: 60px">结果</th>
-          <th style="width: 150px">媒体</th>
-          <th>推文</th>
-          <th style="width: 130px">大小</th>
-        </tr>
-      </thead>
-      <tbody id="rows"></tbody>
-    </table>
-    <div class="empty hide" id="empty">还没有解析记录，去群里发个X链接试试～</div>
+    <div class="records-list" id="recordsList"></div>
+    <div class="empty hide" id="empty">还没有解析记录，去群里发个 X 链接试试～</div>
 
     <script src="./app.js"></script>
   </body>

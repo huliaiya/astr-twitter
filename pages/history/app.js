@@ -42,22 +42,24 @@
   function renderStats(stats) {
     var counts = stats.counts || {};
     var cards = [
-      [t("pages.history.total", "总解析"), stats.total || 0],
-      [t("pages.history.ok", "成功"), stats.ok || 0],
-      [t("pages.history.failed", "失败"), stats.failed || 0],
-      [t("pages.history.rate", "成功率"), (stats.success_rate || 0) + "%"],
-      [t("pages.history.video", "视频"), counts.video || 0],
-      [t("pages.history.image", "图片"), counts.image || 0],
-      [t("pages.history.gif", "GIF"), counts.dynamic || 0],
-      [t("pages.history.bytes", "流量"), humanSize(stats.bytes)],
+      { k: t("pages.history.total", "总解析"), v: stats.total || 0, cls: "" },
+      { k: t("pages.history.ok", "成功"), v: stats.ok || 0, cls: "ok" },
+      { k: t("pages.history.failed", "失败"), v: stats.failed || 0, cls: "bad" },
+      { k: t("pages.history.rate", "成功率"), v: (stats.success_rate || 0) + "%", cls: "accent" },
+      { k: t("pages.history.video", "视频"), v: counts.video || 0, cls: "" },
+      { k: t("pages.history.image", "图片"), v: counts.image || 0, cls: "" },
+      { k: t("pages.history.gif", "GIF"), v: counts.dynamic || 0, cls: "" },
+      { k: t("pages.history.bytes", "流量"), v: humanSize(stats.bytes), cls: "" },
     ];
     el("cards").innerHTML = cards
       .map(function (item) {
         return (
-          '<div class="card"><div class="k">' +
-          item[0] +
-          '</div><div class="v">' +
-          item[1] +
+          '<div class="stat-card"><div class="k">' +
+          item.k +
+          '</div><div class="v' +
+          (item.cls ? " " + item.cls : "") +
+          '">' +
+          item.v +
           "</div></div>"
         );
       })
@@ -77,8 +79,16 @@
       "　历史上限：" + (settings.history_size || "-");
   }
 
-  function renderRows(records) {
-    el("rows").innerHTML = records
+  function renderCards(records) {
+    var list = el("recordsList");
+    if (!records || records.length === 0) {
+      list.innerHTML = "";
+      el("empty").classList.remove("hide");
+      return;
+    }
+    el("empty").classList.add("hide");
+
+    list.innerHTML = records
       .map(function (record) {
         var counts = record.counts || {};
         var pills = Object.keys(counts)
@@ -90,24 +100,38 @@
           })
           .join("");
         var detail = record.ok
-          ? pills || "—"
+          ? '<div class="pills">' + (pills || "—") + "</div>"
           : '<span class="bad">' + (record.error || t("pages.history.failed", "失败")) + "</span>";
-        var title = (record.title || "").replace(/\n/g, " ").slice(0, 60);
+        var title = (record.title || "").replace(/\n/g, " ").slice(0, 200);
+        var statusCls = record.ok ? "ok" : "bad";
+        var statusIcon = record.ok ? "✅" : "❌";
+
         return (
-          "<tr>" +
-          "<td>" + (record.time || "") + "</td>" +
-          '<td class="' + (record.ok ? "ok" : "bad") + '">' + (record.ok ? "✅" : "❌") + "</td>" +
-          "<td>" + detail + "</td>" +
-          '<td class="url"><a href="' + record.url + '" target="_blank" rel="noreferrer">' +
-          record.url + "</a>" +
-          (title ? '<div class="meta">' + title + "</div>" : "") +
-          "</td>" +
-          "<td>" + (record.bytes ? humanSize(record.bytes) : "—") + "</td>" +
-          "</tr>"
+          '<div class="record-card" data-id="' + record.url + '">' +
+          '<div class="record-header" onclick="toggleCard(this)">' +
+          '<div class="status-badge ' + statusCls + '">' + statusIcon + '</div>' +
+          '<div class="record-main">' +
+          '<div class="record-time">' + (record.time || "") + '</div>' +
+          '<div class="record-url"><a href="' + record.url + '" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">' + record.url + '</a></div>' +
+          '</div>' +
+          '<span class="expand-icon">▼</span>' +
+          '</div>' +
+          '<div class="record-details">' +
+          (detail ? '<div class="detail-row"><span class="detail-label">媒体</span><div class="detail-value">' + detail + '</div></div>' : '') +
+          (title ? '<div class="detail-row"><span class="detail-label">标题</span><div class="detail-value">' + title + '</div></div>' : '') +
+          '<div class="detail-row"><span class="detail-label">大小</span><div class="detail-value">' + (record.bytes ? humanSize(record.bytes) : "—") + '</div></div>' +
+          '<div class="detail-row"><span class="detail-label">来源</span><div class="detail-value">' + (record.source || "—") + '</div></div>' +
+          '</div>' +
+          '</div>'
         );
       })
       .join("");
-    el("empty").classList.toggle("hide", records.length > 0);
+
+    // 点击展开/折叠
+    window.toggleCard = function (header) {
+      var card = header.closest(".record-card");
+      card.classList.toggle("expanded");
+    };
   }
 
   function showMessage(text, isError) {
@@ -126,7 +150,7 @@
         state.settings = data.settings || {};
         state.loaded = true;
         renderStats(data.stats || {});
-        renderRows(data.records || []);
+        renderCards(data.records || []);
       })
       .catch(function (error) {
         showMessage(
