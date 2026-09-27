@@ -156,8 +156,12 @@ def parse_syndication_json(payload: dict[str, Any], url: str = "") -> ParseResul
 
     user = payload.get("user") if isinstance(payload.get("user"), dict) else {}
     author = None
+    handle = None
     if isinstance(user, dict):
         author = user.get("name") or user.get("screen_name")
+        screen_name = user.get("screen_name")
+        if isinstance(screen_name, str) and screen_name:
+            handle = screen_name
     title, is_repost = clean_title(payload.get("text") if isinstance(payload.get("text"), str) else None)
 
     cover: str | None = None
@@ -203,16 +207,30 @@ def parse_syndication_json(payload: dict[str, Any], url: str = "") -> ParseResul
     if not contents:
         raise ParseException("syndication 未返回任何媒体")
 
+    duration = payload.get("video") if isinstance(payload.get("video"), dict) else {}
+    duration_text: str | None = None
+    if isinstance(duration, dict):
+        seconds = duration.get("durationMs")
+        if isinstance(seconds, (int, float)) and seconds > 0:
+            total = int(round(seconds / 1000))
+            duration_text = f"{total // 60}:{total % 60:02d}"
+
+    cover_is_content = any(
+        (item.url or "").split("?", 1)[0] == (cover or "").split("?", 1)[0] for item in contents
+    )
     return ParseResult(
         url=url,
         tweet_id=tweet_id or None,
         title=title,
         author_name=author or "无用户名",
+        author_handle=handle,
         cover=cover,
         contents=contents,
         source="syndication",
         is_repost=is_repost,
         quoted_url=None,
+        duration=duration_text,
+        cover_is_content=cover_is_content,
     )
 
 

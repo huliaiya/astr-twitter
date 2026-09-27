@@ -16,7 +16,9 @@
 - **自动解析（按需开启）**：默认不打扰任何会话，管理员发一次 `/开启解析`，之后**该会话**里出现推特链接就自动解析（含卡片/Json 组件里的链接）
 - **触发方式可选**：`all`（有链接就解析）/ `at`（需要 @机器人）/ `command_only`（只用指令）
 - **手动解析**：`/解析 <链接>`，别名 `/推特解析`、`/tw`、`/x解析`
-- **视频 / 图片 / GIF / 音频**：视频自动取第一个 MP4（多为 720p）；GIF 以 mp4 发送；接口返回 MP3 时可选择以语音发送
+- **视频 / 图片 / GIF / 音频**：视频取最高清晰度那一档（通常是 720p）；GIF 以 mp4 发送；接口返回 MP3 时可选择以语音发送
+- **简介带作者与媒体信息**（默认开启）：`作者：@Fortnite` + `视频 · 720p · 0:07` + 原文，可分别开关，默认不带表情
+- **封面不串味**：视频/GIF 的缩略图归为封面（不会再当成独立图片重复发）；只有图片的推文不会多发一遍封面；封面优先取 xdown 的缩略图容器，头像/表情（twemoji）/图标一律不当封面
 - **引用/转发**：正文里的 `RT @user:` 自动清洗并标注「🔁 转发自」；可选 `parse_quoted` 再解析一层被引用的原推
 - **失败兜底**：xdown 接口失败时自动改用 Twitter 官方 syndication 接口；媒体下载失败/超限时把直链作为文本发出
 - **并发下载 + 同链接缓存**：多图推文并行下载（并发可配），同一 URL 进程内只下一次
@@ -122,6 +124,10 @@ astr-twitter/
 | `max_media` | `9` | 单条推文最多发送媒体数 |
 | `max_title_chars` | `300` | 正文最大长度，`0` 不限制 |
 | `send_title` | `true` | 是否附带推文正文 |
+| `send_author` | `true` | 简介里带作者：从链接取 `@handle`（`x.com/Fortnite/status/1` → `@Fortnite`） |
+| `send_media_info` | `true` | 简介里带媒体信息：`视频 · 720p · 0:07` / `图片 ×3` |
+| `send_link` | `false` | 简介里带原推链接 |
+| `caption_emoji` | `false` | 媒体类型前加 🎬/🖼️/🎞️/🎵（默认纯文字） |
 | `send_cover` | `false` | 是否额外发送封面（封面直链是 `pbs.twimg.com`） |
 | `send_audio` | `false` | 接口返回 MP3 时是否以语音消息发送 |
 | `parse_quoted` | `false` | 是否再解析一层被引用/转发的原推 |
@@ -138,6 +144,23 @@ astr-twitter/
 | `proxy` | 空 | `http://127.0.0.1:7890` 之类，用于接口请求与媒体下载 |
 | `timeout` / `retry` | `20.0` / `2` | 接口超时与重试次数 |
 | `fallback_syndication` | `true` | xdown 失败时是否改用官方 syndication 后备接口 |
+
+## 💬 消息长什么样
+
+以一条视频推文为例，开启自动解析后机器人发的是：
+
+```
+作者：@Fortnite
+视频 · 720p · 0:07
+Don’t miss the (Lucky) Landing.Keep your eyes peeled. OG Season 3 launches tomorrow.
+[视频（封面：该推文的缩略图）]
+```
+
+- 作者来自链接里的 handle，无需额外请求；
+- `720p` 与 `0:07` 来自 xdown 返回的分辨率与时长；
+- 图片推文是 `图片 ×3` 这种形式，**不会再重复发一遍封面**；
+- 视频/GIF 的缩略图默认不单独发（想发就打开 `send_cover`，它会排在视频前面，像预览图）；
+- 想让简介更干净，可以关掉 `send_title`（只留作者+媒体信息），或关掉 `send_author`。
 
 ## 🖥 WebUI 插件页面
 
@@ -189,15 +212,20 @@ pytest
 本仓库的测试情况（AstrBot 4.28.1 + Python 3.12，实测）：
 
 ```
-84 passed in 139.31s
+101 passed in 131.58s
 ```
 
-- **离线（60+ 项）**：
+- **离线（90+ 项）**：
   - URL 匹配 10 项（`www.` / `mobile.` / `x.com/i/web/status/` / 夹带参数 / 反例）、3 份 xdown HTML fixture 断言
   - 正文清洗（`RT @user:` → 转发标记、t.co 去链）、截断、引用链接识别、音频按钮解析
   - **syndication token 与本机 Node（V8 `toString(36)`）的 8 组结果逐一比对**，含边界 ID
   - syndication JSON → ParseResult 映射（最高码率 mp4、忽略 m3u8、gif、已带参数的图片 URL、空体报错）
   - 下载器：落盘与类型嗅探、**超限中断不留残文件**、并发 `download_many` 的单点失败隔离、同 URL 缓存命中
+  - **URL 清洗**：`#`（转换为 MP3 的占位按钮）、`/`（下载更多视频）、相对路径、`javascript:` 一律拒绝
+    —— 这正是线上 `媒体下载失败：InvalidUrlClientError` 的根因
+  - **中转链解码**：从 `dl.snapcdn.app/get?token=<JWT>` 解出原始地址与文件名，用于识别封面、取分辨率、起文件名
+  - **封面判定**：视频/GIF 的缩略图归封面不再当图片；图片推文不重复发封面；HTML 里先出现表情/头像时封面不被抢走
+  - **简介拼接**：「作者：@handle」「视频 · 720p · 0:07」「图片 ×3」「转发」、关闭某项、截断、无作者时不硬塞
   - 历史：上限淘汰、统计（成功率/媒体计数/常解析作者）、损坏文件容错、清空
   - 插件：开关优先级、触发方式 `at`/`command_only`、`/解析历史`、插件 Web API 注册与响应体（用
     真实 `PluginRequest` 绑定上下文调用）、**按 AstrBot 真实导入路径 `data.plugins.astrbot_plugin_twitter.main` 加载**的保真测试
@@ -205,7 +233,9 @@ pytest
 - **集成**：用真实 AstrBot 的事件与消息组件跑完整链路（消息 → 解析 → 下载 → `chain_result`），
   断言消息链里出现 `Image` / `Video` 组件、文件真实存在且体积合理、`event.stop_event()` 被调用；
   覆盖「先 `/开启解析` 再发链接自动解析」「@机器人 触发 + 写入历史」「引用原推跟随」等场景；
-  并断言 7 个 handler 与 `parse_twitter_link` 这个 LLM Tool 已成功注册。
+  并断言 7 个 handler 与 `parse_twitter_link` 这个 LLM Tool 已成功注册；
+  以及用假下载器断言简介内容、封面排序与 `cover` 透传、图片推文不重复发封面、
+  下载失败回落直链、**转换按钮的 `#` 地址永远不进下载队列**。
 
 命令行调试（不需要 AstrBot）：
 
@@ -228,8 +258,10 @@ python devtools/make_logo.py          # 重新生成 logo.png
 5. **音频需要接口返回 MP3 按钮**；当前 xdown 对普通视频推文只给 MP4，所以 `send_audio`
    多数情况下不会触发（离线用例用构造的 HTML 覆盖了这条分支）。
 6. 视频类消息并非所有平台都能发送；失败时会降级为发送原链接。
-7. 多清晰度只取第一个 MP4（与原插件一致，通常是 720p）。
-8. `logo.png` 由脚本程序化生成（纯标准库），风格朴素，可按需替换同名文件。
+7. 简介里的作者只能从链接里取到 `@handle`；`x.com/i/web/status/...` 这种没有用户名的链接
+   会省略作者行（昵称/时间/点赞数需要官方接口，暂未接入）。
+8. 多清晰度只取下载列表里的第一档（与原插件一致，xdown 一般把最高清放第一个）。
+9. `logo.png` 由脚本程序化生成（纯标准库），风格朴素，可按需替换同名文件。
 
 ## 📄 来源与致谢
 

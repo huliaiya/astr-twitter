@@ -15,7 +15,10 @@
 from __future__ import annotations
 
 import asyncio
+import base64
+import json
 import re
+import urllib.parse
 from dataclasses import asdict, dataclass, field
 from itertools import chain
 from typing import Any
@@ -68,9 +71,12 @@ class Content:
     """一条待发送的媒体。"""
 
     type: str  # video | image | dynamic(gif) | audio
-    url: str
+    url: str  # 实际下载地址（xdown 的中转链，或直链）
     cover: str | None = None
     label: str | None = None  # 如 "720p" / "MP3"，用于日志与排查
+    target_url: str | None = None  # 中转链里解出来的原始地址（video.twimg.com / pbs.twimg.com）
+    filename: str | None = None  # 建议文件名（来自中转链）
+    is_cover: bool = False  # 这张图其实就是视频/GIF 的封面缩略图
 
     @property
     def is_video_like(self) -> bool:
@@ -92,6 +98,9 @@ class ParseResult:
     source: str = "xdown"  # xdown | syndication，便于排查是哪个后端解析的
     is_repost: bool = False  # 正文带 RT @user: 前缀
     quoted_url: str | None = None  # 被引用/转发的原推链接（尽力而为）
+    author_handle: str | None = None  # 从链接里取到的 @handle，如 Fortnite
+    duration: str | None = None  # 视频/GIF 时长，如 "0:07"
+    cover_is_content: bool = False  # 封面本身就在 contents 里（图片推文），别重复发
 
     @property
     def counts(self) -> dict[str, int]:
@@ -135,6 +144,175 @@ class TwitterConfig:
         if self.cookie:
             headers["cookie"] = self.cookie
         return headers
+
+
+# --------------------------------------------------------------------------- #
+# 小工具：URL 校验 / 中转链解码 / 文件名 / 正文与标题
+# --------------------------------------------------------------------------- #
+# 明显不是推文媒体的图片（头像、表情、图标），不要当封面
+JUNK_IMAGE_RE = re.compile(
+    r"(profile_images|/emoji/|twemoji|/icon|\.svg($|[?#])|data:image)",
+    re.IGNORECASE,
+)
+
+# 分辨率，如 /1280x720/
+RESOLUTION_RE = re.compile(r"/(\d{3,4})x(\d{3,4})/")
+# 时长，如 <p>0:07</p>
+DURATION_RE = re.compile(r"^\s*(\d{1,2}:\d{2})\s*$")
+
+
+def is_http_url(url: Any) -> bool:
+    """只接受 http(s) 绝对地址：#、/、javascript:、空值、相对路径一律拒绝。
+
+    xdown 的返回里既有真链接，也有 `href="#"`（转换为 MP3 等占位按钮）
+    与 `href="/"`（下载更多视频），这些拿去下载会抛 InvalidUrlClientError。
+    """
+    if not isinstance(url, str):
+        return False
+    url = url.strip()
+    return url.startswith("http://") or url.startswith("https://")
+
+
+def is_media_image_url(url: Any) -> bool:
+    """能当封面的图片地址（排除头像/表情/图标）。"""
+    return is_http_url(url) and not JUNK_IMAGE_RE.search(str(url))
+
+
+def decode_snapcdn(url: str) -> dict[str, str] | None:
+    """解开 xdown 中转链 `dl.snapcdn.app/get?token=<JWT>` 里的原始地址与文件名。
+
+    只是读 JWT 的 payload（不校验签名，也不改变下载走中转链的行为），
+    用来：判断「下载图片」是不是视频封面、拿到分辨率、给落地文件起个正常名字。
+    """
+    if not is_http_url(url) or "token=" not in url:
+        return None
+    try:
+        query = urllib.parse.parse_qs(urllib.parse.urlparse(url).query)
+        token = (query.get("token") or [""])[0]
+        payload = token.split(".")[1]
+        payload += "=" * (-len(payload) % 4)
+        data = json.loads(base64.urlsafe_b64decode(payload).decode("utf-8"))
+    except Exception:  # noqa: BLE001 - 解不开就算了
+        return None
+    if not isinstance(data, dict):
+        return None
+    target = data.get("url")
+    filename = data.get("filename")
+    result: dict[str, str] = {}
+    if isinstance(target, str) and target:
+        result["target_url"] = target
+    if isinstance(filename, str) and filename:
+        result["filename"] = filename
+    return result or None
+
+
+def media_key(url: str | None) -> str:
+    """比较两条媒体是否同一份内容（忽略查询参数与大小写）。"""
+    if not url:
+        return ""
+    return url.split("?", 1)[0].strip().lower()
+
+
+def sanitize_filename(name: str | None, fallback_ext: str = ".bin") -> str | None:
+    """把中转链给的文件名洗成安全的文件名。"""
+    if not name:
+        return None
+    name = re.sub(r"[\\/:*?\"<>|\x00-\x1f]", "_", str(name)).strip().strip(".")
+    name = re.sub(r"\s+", "_", name)
+    if not name:
+        return None
+    if "." not in name:
+        name += fallback_ext
+    return name[:120]
+
+
+def resolution_label(target_url: str | None, text: str = "") -> str | None:
+    """从按钮文案 `(720p)` 或原始地址 `/1280x720/` 里取分辨率标签。"""
+    match = re.search(r"\((\d{3,4})p\)", text or "")
+    if match:
+        return f"{match.group(1)}p"
+    if target_url:
+        found = RESOLUTION_RE.search(target_url)
+        if found:
+            width, height = int(found.group(1)), int(found.group(2))
+            return f"{min(width, height)}p"
+    return None
+
+
+def extract_handle(url: str) -> str | None:
+    """从推文链接里取作者 handle：x.com/Fortnite/status/123 → Fortnite。"""
+    match = re.search(
+        r"(?:x|twitter)\.com/(?!i/web)([A-Za-z0-9_]{1,20})/status/\d+",
+        url or "",
+        re.IGNORECASE,
+    )
+    return match.group(1) if match else None
+
+
+def format_media_info(result: "ParseResult", *, emoji: bool = False) -> str:
+    """把「视频 · 720p · 0:07 / 图片 ×3」这类媒体信息拼成一行。"""
+    parts: list[str] = []
+    videos = [c for c in result.contents if c.type == "video"]
+    gifs = [c for c in result.contents if c.type == "dynamic"]
+    images = [c for c in result.contents if c.type == "image"]
+    audios = [c for c in result.contents if c.type == "audio"]
+
+    def build(name: str, count: int, label: str, extra: list[str]) -> str:
+        head = f"{name} ×{count}" if count > 1 else name
+        detail = [d for d in extra if d]
+        text = f"{head} · {' · '.join(detail)}" if detail else head
+        return f"{label} {text}".strip()
+
+    if videos:
+        parts.append(build("视频", len(videos), "🎬" if emoji else "", [videos[0].label, result.duration]))
+    if gifs:
+        parts.append(build("GIF", len(gifs), "🎞️" if emoji else "", [result.duration]))
+    if images:
+        parts.append(build("图片", len(images), "🖼️" if emoji else "", []))
+    if audios:
+        parts.append(build("音频", len(audios), "🎵" if emoji else "", []))
+    return " ＋ ".join(parts)
+
+
+def build_caption(
+    result: "ParseResult",
+    *,
+    include_text: bool = True,
+    include_author: bool = True,
+    include_media_info: bool = True,
+    include_link: bool = False,
+    emoji: bool = False,
+    max_chars: int = 300,
+) -> str:
+    """拼发送用的简介：作者、媒体信息、正文、链接（都可单独关闭）。"""
+    lines: list[str] = []
+
+    if include_author:
+        handle = (result.author_handle or "").lstrip("@")
+        name = result.author_name if result.author_name != "无用户名" else ""
+        if handle and name:
+            author = f"{name} (@{handle})"
+        else:
+            author = f"@{handle}" if handle else name
+        if author:
+            if result.is_repost:
+                author += " · 转发"
+            lines.append(f"作者：{author}")
+
+    if include_media_info:
+        info = format_media_info(result, emoji=emoji)
+        if info:
+            lines.append(info)
+
+    if include_text:
+        text = truncate(result.title, max_chars)
+        if text:
+            lines.append(text)
+
+    if include_link and result.url:
+        lines.append(result.url)
+
+    return "\n".join(lines)
 
 
 def search_url(text: str) -> tuple[str, re.Match[str]] | None:
@@ -197,7 +375,17 @@ def find_quoted_url(html_or_text: str, tweet_id: str | None) -> str | None:
 
 
 def parse_twitter_html(html_content: str) -> ParseResult:
-    """完全对齐原插件的 parse_twitter_html()，并额外解析音频/转发/引用信息。"""
+    """解析 xdown 返回的 HTML。
+
+    相比原插件额外做了这些事（都是线上踩过的坑）：
+      - 只接受 http(s) 绝对地址：`href="#"`（转换为 MP3 等占位按钮）、`href="/"`
+        （下载更多视频）拿去下载会抛 InvalidUrlClientError；
+      - 跳过 `action-convert` 之类的转换按钮，只认「下载 xxx」；
+      - 解开中转链里的原始地址，用来识别「下载图片」其实是视频封面、取分辨率、起文件名；
+      - 视频/GIF 推文里的那张图就是封面缩略图，归到 cover，不重复当图片发；
+      - 封面取第一张真正的媒体图（排除头像/表情/图标）；
+      - 顺带解析时长。
+    """
     if not html_content:
         raise ParseException("解析失败, 数据为空")
 
@@ -205,40 +393,93 @@ def parse_twitter_html(html_content: str) -> ParseResult:
 
     title: str | None = None
     cover_url: str | None = None
-    video_url: str | None = None
-    video_label: str | None = None
-    images_urls: list[str] = []
-    dynamic_urls: list[str] = []
-    audio_urls: list[str] = []
+    duration: str | None = None
 
-    # 1. 封面：第一个 <img src>
-    thumb_tag = soup.find("img")
-    if isinstance(thumb_tag, Tag):
-        if cover := thumb_tag.get("src"):
-            cover_url = str(cover)
+    # 1. 封面：优先 xdown 的缩略图容器（.thumbnail/.image-tw/.tw-left），
+    #    再退回第一张真正的媒体图 —— 跳过头像、表情（twemoji）和各种图标，
+    #    否则群里收到的「封面」可能是一张表情或图钉。
+    candidates: list[Tag] = []
+    for selector in (".thumbnail img", ".image-tw img", ".tw-left img"):
+        candidates.extend(tag for tag in soup.select(selector) if isinstance(tag, Tag))
+    candidates.extend(tag for tag in soup.find_all("img") if isinstance(tag, Tag))
+    for img in candidates:
+        src = img.get("src")
+        if is_media_image_url(src):
+            cover_url = str(src).strip()
+            break
 
-    # 2. 下载链接（tw-button-dl 与 abutton 两类，顺序与原插件 chain() 一致）
+    contents: list[Content] = []
+    seen: set[str] = set()
+
+    # 2. 下载按钮：tw-button-dl 与 abutton 两类，顺序与原插件一致
     tw_button_tags = soup.find_all("a", class_="tw-button-dl")
     abutton_tags = soup.find_all("a", class_="abutton")
     for tag in chain(tw_button_tags, abutton_tags):
         if not isinstance(tag, Tag):
             continue
-        href = tag.get("href")
-        if href is None:
-            continue
-        href = str(href)
+        classes = [str(c) for c in (tag.get("class") or [])]
+        if "action-convert" in classes:
+            continue  # 「转换为 MP3/GIF」是占位按钮（href="#"），真转换走 POST
         text = tag.get_text(strip=True)
         lowered = text.lower()
+        if not text.startswith("下载"):
+            continue  # 只认「下载 MP4 / 下载图片 / 下载 gif」，排除「下载更多视频」
+        href = tag.get("href")
+        if not is_http_url(href):
+            continue  # # / / / javascript: 一律跳过
+        href = str(href).strip()
+
+        info = decode_snapcdn(href) or {}
+        target = info.get("target_url")
+        key = media_key(target or href)
+        if key in seen:
+            continue
+        seen.add(key)
+
+        filename = sanitize_filename(
+            info.get("filename"), ".mp4" if ("mp4" in lowered or "gif" in lowered) else ".jpg"
+        )
         if "mp4" in lowered or "视频" in text:
-            if video_url is None:  # 多个清晰度只取第一个（原插件有 break）
-                video_url = href
-                video_label = text
+            # 多个清晰度只取第一个（与原插件一致，通常是 720p）
+            if any(item.type == "video" for item in contents):
+                continue
+            contents.append(
+                Content(
+                    type="video",
+                    url=href,
+                    cover=cover_url,
+                    label=resolution_label(target, text) or text or None,
+                    target_url=target,
+                    filename=filename,
+                )
+            )
         elif "gif" in lowered:
-            dynamic_urls.append(href)
+            contents.append(
+                Content(
+                    type="dynamic",
+                    url=href,
+                    cover=cover_url,
+                    label=resolution_label(target, text),
+                    target_url=target,
+                    filename=filename,
+                )
+            )
         elif "mp3" in lowered or "音频" in text or "audio" in lowered:
-            audio_urls.append(href)
+            contents.append(
+                Content(type="audio", url=href, label="MP3", target_url=target, filename=filename)
+            )
         elif "图片" in text or "jpg" in lowered or "jpeg" in lowered or "png" in lowered:
-            images_urls.append(href)
+            if target and JUNK_IMAGE_RE.search(target):
+                continue  # 表情/头像/图标，不是推文图片
+            contents.append(
+                Content(
+                    type="image",
+                    url=href,
+                    label=resolution_label(target, text),
+                    target_url=target,
+                    filename=filename,
+                )
+            )
 
     # 3. 标题：第一个 <h3>
     title_tag = soup.find("h3")
@@ -246,18 +487,39 @@ def parse_twitter_html(html_content: str) -> ParseResult:
         title = title_tag.get_text(strip=True)
     title, is_repost = clean_title(title)
 
-    # 4. 推文 ID（原插件里被注释掉了，这里保留做 debug 信息）
+    # 4. 时长：内容区里的 <p>0:07</p>
+    for paragraph in soup.find_all("p"):
+        if not isinstance(paragraph, Tag):
+            continue
+        matched = DURATION_RE.match(paragraph.get_text(strip=True))
+        if matched:
+            duration = matched.group(1)
+            break
+
+    # 5. 视频/GIF 推文里的「下载图片」= 视频缩略图，算封面而不是独立图片
+    has_moving = any(item.is_video_like for item in contents)
+    kept: list[Content] = []
+    for item in contents:
+        if (
+            item.type == "image"
+            and has_moving
+            and media_key(item.target_url or item.url) == media_key(cover_url)
+        ):
+            item.is_cover = True
+            cover_url = cover_url or item.target_url or item.url
+            continue
+        kept.append(item)
+    contents = kept
+    # 只有图片的推文：封面就是其中一张，别重复发
+    cover_is_content = any(
+        media_key(item.target_url or item.url) == media_key(cover_url) for item in contents
+    )
+
+    # 6. 推文 ID（原插件里被注释掉了，这里保留做 debug 信息）
     tweet_id: str | None = None
     twitter_id_input = soup.find("input", {"id": "TwitterId"})
     if isinstance(twitter_id_input, Tag) and isinstance(twitter_id_input.get("value"), str):
         tweet_id = str(twitter_id_input.get("value"))
-
-    contents: list[Content] = []
-    if video_url:
-        contents.append(Content(type="video", url=video_url, cover=cover_url, label=video_label))
-    contents.extend(Content(type="image", url=u) for u in images_urls)
-    contents.extend(Content(type="dynamic", url=u, cover=cover_url) for u in dynamic_urls)
-    contents.extend(Content(type="audio", url=u, label="MP3") for u in audio_urls)
 
     return ParseResult(
         tweet_id=tweet_id,
@@ -266,6 +528,8 @@ def parse_twitter_html(html_content: str) -> ParseResult:
         is_repost=is_repost,
         quoted_url=find_quoted_url(html_content, tweet_id),
         contents=contents,
+        duration=duration,
+        cover_is_content=cover_is_content,
     )
 
 
@@ -385,5 +649,6 @@ async def _parse_via_xdown(
     result = parse_twitter_html(data)
     result.url = url
     result.source = "xdown"
+    result.author_handle = extract_handle(url)
     return result
 

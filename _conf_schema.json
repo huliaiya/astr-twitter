@@ -21,7 +21,11 @@
     "description": "自动解析的触发方式",
     "type": "string",
     "default": "all",
-    "options": ["all", "at", "command_only"],
+    "options": [
+      "all",
+      "at",
+      "command_only"
+    ],
     "hint": "all=消息里有链接就解析；at=需要 @机器人 才解析（群里更安静）；command_only=只用 /解析 指令或 LLM 工具，不自动解析。"
   },
   "interrupt_event": {
@@ -59,6 +63,30 @@
     "type": "bool",
     "default": true,
     "hint": "把推文正文（h3 标题）作为文本一起发出。"
+  },
+  "send_author": {
+    "description": "简介里带上作者",
+    "type": "bool",
+    "default": true,
+    "hint": "从推文链接里取 @handle（如 x.com/Fortnite/status/1 → @Fortnite）。"
+  },
+  "send_media_info": {
+    "description": "简介里带上媒体信息",
+    "type": "bool",
+    "default": true,
+    "hint": "例如「视频 · 720p · 0:07」「图片 ×3」。"
+  },
+  "send_link": {
+    "description": "简介里带上原推链接",
+    "type": "bool",
+    "default": false,
+    "hint": "方便点回原文；默认关闭以免刷屏。"
+  },
+  "caption_emoji": {
+    "description": "简介里的媒体类型带图标",
+    "type": "bool",
+    "default": false,
+    "hint": "开启后显示 🎬 视频 / 🖼️ 图片 / 🎞️ GIF / 🎵 音频；默认用纯文字。"
   },
   "send_cover": {
     "description": "发送视频封面",

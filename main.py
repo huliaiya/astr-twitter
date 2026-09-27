@@ -40,11 +40,14 @@ from .core.history import HistoryRecord, HistoryStore
 from .core.twitter import (
     DEFAULT_ENDPOINT,
     DEFAULT_ORIGIN,
+    Content,
     ParseException,
     ParseResult,
     TwitterConfig,
+    build_caption,
     extract_urls,
     parse_tweet,
+    sanitize_filename,
     truncate,
 )
 
@@ -77,6 +80,10 @@ class Settings:
     max_media: int = 9
     max_title_chars: int = 300
     send_title: bool = True
+    send_author: bool = True
+    send_media_info: bool = True
+    send_link: bool = False
+    caption_emoji: bool = False
     send_cover: bool = False
     send_audio: bool = False
     parse_quoted: bool = False
@@ -135,6 +142,10 @@ class Settings:
             max_media=max(1, as_int("max_media", 9)),
             max_title_chars=max(0, as_int("max_title_chars", 300)),
             send_title=as_bool("send_title", True),
+            send_author=as_bool("send_author", True),
+            send_media_info=as_bool("send_media_info", True),
+            send_link=as_bool("send_link", False),
+            caption_emoji=as_bool("caption_emoji", False),
             send_cover=as_bool("send_cover", False),
             send_audio=as_bool("send_audio", False),
             parse_quoted=as_bool("parse_quoted", False),
@@ -456,51 +467,87 @@ class TwitterPlugin(Star):
             return None
 
         segments: list[Any] = []
-        title = truncate(result.title, settings.max_title_chars)
-        if settings.send_title and title:
-            prefix = "🔁 转发自 " if result.is_repost else ""
-            segments.append(Comp.Plain(f"{prefix}{title}\n"))
+
+        # 简介：作者 / 媒体信息（类型·分辨率·时长）/ 正文 / 链接，可分别开关
+        caption = build_caption(
+            result,
+            include_text=settings.send_title,
+            include_author=settings.send_author,
+            include_media_info=settings.send_media_info,
+            include_link=settings.send_link,
+            emoji=settings.caption_emoji,
+            max_chars=settings.max_title_chars,
+        )
+        if caption:
+            segments.append(Comp.Plain(caption + "\n"))
 
         # 多图推文并行下载（带并发上限），边下边校验大小
         wanted = [item for item in contents if item.type != "audio" or settings.send_audio]
+
+        # 视频/GIF 的封面单独取一张（图片推文的封面就是图片本身，不重复发）
+        cover_item: Content | None = None
+        if settings.send_cover and result.cover and not result.cover_is_content:
+            cover_item = Content(
+                type="image",
+                url=result.cover,
+                label="封面",
+                filename=sanitize_filename(f"cover-{result.tweet_id or 'x'}.jpg", ".jpg"),
+            )
+
+        batch = ([cover_item] if cover_item else []) + wanted
         outcome = await self.downloader.download_many(
-            [(item.url, {"subdir": result.tweet_id or "unknown"}) for item in wanted],
+            [
+                (
+                    item.url,
+                    {
+                        "subdir": result.tweet_id or "unknown",
+                        "filename": item.filename,
+                    },
+                )
+                for item in batch
+            ],
             max_bytes=settings.max_video_mb * 1024 * 1024,
         )
+
+        cover_segments: list[Any] = []
+        media_segments: list[Any] = []
         downloaded = 0
         total_bytes = 0
-        for item, media in zip(wanted, outcome):
+        for index, (item, media) in enumerate(zip(batch, outcome)):
+            is_cover = cover_item is not None and index == 0
+            target = cover_segments if is_cover else media_segments
             if isinstance(media, Exception):
-                logger.warning(f"[{PLUGIN_NAME}] 下载失败 {item.type}: {media}")
+                logger.warning(f"[{PLUGIN_NAME}] 下载失败 {item.type}({item.label or ''}): {media}")
+                if is_cover:
+                    logger.debug(f"[{PLUGIN_NAME}] 封面下载失败（可忽略）: {media}")
+                    continue
                 if settings.fallback_link:
-                    segments.append(Comp.Plain(f"{item.url}\n"))
+                    target.append(Comp.Plain(f"{item.url}\n"))
                 if notify_error:
-                    await self._reply(event, f"媒体下载失败：{media}")
+                    await self._reply(event, f"媒体下载失败：{item.type} {media}")
                 continue
-            downloaded += 1
-            total_bytes += media.size
+            if not is_cover:
+                downloaded += 1
+                total_bytes += media.size
             if item.is_video_like:
-                segments.append(Comp.Video.fromFileSystem(path=str(media.path)))
+                try:
+                    target.append(
+                        Comp.Video.fromFileSystem(path=str(media.path), cover=result.cover or "")
+                    )
+                except Exception as e:  # noqa: BLE001 - 封面参数不被接受时退回普通视频
+                    logger.debug(f"[{PLUGIN_NAME}] 带封面发送失败，改为普通视频: {e}")
+                    target.append(Comp.Video.fromFileSystem(path=str(media.path)))
             elif item.type == "audio":
-                segments.append(Comp.Record.fromFileSystem(str(media.path)))
+                target.append(Comp.Record.fromFileSystem(str(media.path)))
             else:
-                segments.append(Comp.Image.fromFileSystem(str(media.path)))
+                target.append(Comp.Image.fromFileSystem(str(media.path)))
             if not settings.keep_files:
                 # 发送是异步的，先登记，发送完成后由清理钩子删除
                 self._pending_cleanup(media.path)
 
-        if settings.send_cover and result.cover:
-            try:
-                cover = await self.downloader.download(
-                    result.cover,
-                    subdir=result.tweet_id or "unknown",
-                    filename=f"cover-{result.tweet_id or 'x'}.jpg",
-                )
-                segments.append(Comp.Image.fromFileSystem(str(cover.path)))
-                if not settings.keep_files:
-                    self._pending_cleanup(cover.path)
-            except DownloadException as e:
-                logger.debug(f"[{PLUGIN_NAME}] 封面下载失败（可忽略）: {e}")
+        # 封面放最前面（像缩略图预览），其余媒体随后
+        segments.extend(cover_segments)
+        segments.extend(media_segments)
 
         await self._record_success(event, result, downloaded, total_bytes)
 

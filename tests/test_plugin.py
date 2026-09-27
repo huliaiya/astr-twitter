@@ -31,6 +31,7 @@ from astrbot.core.star.star_handler import star_handlers_registry  # noqa: E402
 ROOT = Path(__file__).resolve().parents[1]
 URL_PHOTO = "https://x.com/Fortnite/status/1870484479980052921"
 URL_GIF = "https://x.com/Dithmenos9/status/1966798448499286345"
+URL_VIDEO = "https://x.com/Fortnite/status/1904171341735178552"
 
 live = pytest.mark.skipif(
     os.environ.get("ASTR_TWITTER_SKIP_LIVE") == "1",
@@ -563,3 +564,163 @@ def test_schema_covers_settings(plugin_module):
     missing = {field for field in fields if field not in schema}
     assert not missing, f"_conf_schema.json 缺少配置项：{sorted(missing)}"
     assert set(schema) == fields
+
+
+# --------------------------------------------------------------------------- #
+# 简介内容 / 封面处理 / 下载失败兜底（离线，用假下载器，不发真实请求）
+# --------------------------------------------------------------------------- #
+class FakeMedia:
+    def __init__(self, path: Path) -> None:
+        self.path = path
+        self.size = path.stat().st_size if path.exists() else 0
+        self.kind = "image"
+
+
+class FakeDownloader:
+    """记录被下载的 URL，并按需让某几个 URL 失败。"""
+
+    def __init__(self, root: Path, fail_urls: tuple[str, ...] = ()) -> None:
+        self.root = root
+        self.fail_urls = fail_urls
+        self.calls: list[tuple[str, dict]] = []
+
+    async def download(self, url, **kwargs):
+        self.calls.append((url, kwargs))
+        if url in self.fail_urls:
+            from core.downloader import DownloadException
+
+        raise DownloadException("boom")
+        path = self.root / f"{len(self.calls)}.bin"
+        path.write_bytes(b"x" * 10)
+        return FakeMedia(path)
+
+    async def download_many(self, items, *, max_bytes=None):
+        self.calls.extend(items)
+        return [
+            (
+                Exception("InvalidUrlClientError: boom")
+                if url in self.fail_urls
+                else FakeMedia(self._write())
+            )
+            for url, _kwargs in items
+        ]
+
+    def _write(self) -> Path:
+        path = self.root / f"media-{len(self.calls)}.bin"
+        path.write_bytes(b"y" * 20)
+        return path
+
+
+def _fake_result(**kwargs):
+    from core.twitter import Content, ParseResult
+
+    base = dict(
+        url=URL_VIDEO,
+        tweet_id="1904171341735178552",
+        title="Don't miss the (Lucky) Landing.",
+        author_handle="Fortnite",
+        duration="0:07",
+        cover="https://pbs.twimg.com/media/COVER.jpg",
+        contents=[
+            Content(
+                type="video",
+                url="https://dl.snapcdn.app/get?token=AAA",
+                label="720p",
+                filename="clip.mp4",
+            )
+        ],
+    )
+    base.update(kwargs)
+    return ParseResult(**base)
+
+
+async def test_handle_url_caption_and_cover(plugin_module, plugin, tmp_path, monkeypatch):
+    async def fake_parse(*args, **kwargs):
+        return _fake_result()
+
+    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    plugin._downloader = FakeDownloader(tmp_path)
+    plugin.settings.send_cover = True
+
+    segments = await plugin._handle_url(make_event("x"), URL_VIDEO, notify_error=True)
+
+    texts = [c.text for c in segments if isinstance(c, plugin_module.Comp.Plain)]
+    caption = texts[0]
+    assert caption.startswith("作者：@Fortnite"), caption
+    assert "视频 · 720p · 0:07" in caption
+    assert "Lucky" in caption
+    assert URL_VIDEO not in caption, "默认不带链接"
+
+    names = [type(c).__name__ for c in segments]
+    assert names.index("Image") < names.index("Video"), "封面应排在视频前面"
+    video = next(c for c in segments if type(c).__name__ == "Video")
+    assert video.cover == "https://pbs.twimg.com/media/COVER.jpg"
+    # 下载用了中转链给的文件名与子目录
+    assert plugin._downloader.calls[0][0] == "https://pbs.twimg.com/media/COVER.jpg"
+    assert plugin._downloader.calls[1][1]["filename"] == "clip.mp4"
+    assert plugin._downloader.calls[1][1]["subdir"] == "1904171341735178552"
+
+
+async def test_handle_url_photo_cover_not_duplicated(plugin_module, plugin, tmp_path, monkeypatch):
+    photo = "https://pbs.twimg.com/media/PHOTO.jpg"
+
+    async def fake_parse(*args, **kwargs):
+        from core.twitter import Content
+
+        return _fake_result(
+            contents=[Content(type="image", url=photo, target_url=photo)],
+            cover=photo,
+            cover_is_content=True,
+            duration=None,
+        )
+
+    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    plugin._downloader = FakeDownloader(tmp_path)
+    plugin.settings.send_cover = True
+
+    segments = await plugin._handle_url(make_event("x"), URL_VIDEO, notify_error=True)
+    images = [c for c in segments if type(c).__name__ == "Image"]
+    assert len(images) == 1, "图片推文的封面就是这张图，不能重复发"
+    assert len(plugin._downloader.calls) == 1
+
+
+async def test_handle_url_download_failure_falls_back_to_link(plugin_module, plugin, tmp_path, monkeypatch):
+    async def fake_parse(*args, **kwargs):
+        return _fake_result(cover=None)
+
+    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    plugin._downloader = FakeDownloader(tmp_path, fail_urls=("https://dl.snapcdn.app/get?token=AAA",))
+    plugin.settings.fallback_link = True
+
+    segments = await plugin._handle_url(make_event("x"), URL_VIDEO, notify_error=True)
+    texts = [c.text for c in segments if isinstance(c, plugin_module.Comp.Plain)]
+    assert any("dl.snapcdn.app" in text for text in texts), "下载失败要给出直链"
+    assert not any(type(c).__name__ == "Video" for c in segments)
+
+
+async def test_handle_url_no_placeholder_downloads(plugin_module, plugin, tmp_path, monkeypatch):
+    """回归 InvalidUrlClientError：转换按钮的 # 地址永远不该进下载队列。"""
+    html = """
+    <img src="https://pbs.twimg.com/media/REAL.jpg">
+    <a href="https://dl.snapcdn.app/get?token=AAA" class="tw-button-dl button dl-success">下载 MP4 (720p)</a>
+    <a href="#" class="tw-button-dl button dl-success action-convert">转换为 MP3</a>
+    <a href="/" class="button more-video">下载更多视频</a>
+    <h3>标题</h3>
+    <input type="hidden" id="TwitterId" value="999" />
+    """
+
+    from core.twitter import parse_twitter_html
+
+    async def fake_parse(*args, **kwargs):
+        result = parse_twitter_html(html)
+        result.url = URL_VIDEO
+        result.author_handle = "Fortnite"
+        return result
+
+    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    downloader = FakeDownloader(tmp_path)
+    plugin._downloader = downloader
+    plugin.settings.send_audio = True  # 就算开了音频，也不该去下载 "#"
+
+    await plugin._handle_url(make_event("x"), URL_VIDEO, notify_error=True)
+    assert [url for url, _ in downloader.calls] == ["https://dl.snapcdn.app/get?token=AAA"]
