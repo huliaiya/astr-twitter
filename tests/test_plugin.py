@@ -641,7 +641,7 @@ async def test_handle_url_caption_and_cover(plugin_module, plugin, tmp_path, mon
     async def fake_parse(*args, **kwargs):
         return _fake_result()
 
-    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    monkeypatch.setattr("astrbot_plugin_twitter.core.parse_tweet", fake_parse)
     plugin._downloader = FakeDownloader(tmp_path)
     plugin.settings.send_cover = True
 
@@ -680,7 +680,7 @@ async def test_handle_url_photo_cover_not_duplicated(plugin_module, plugin, tmp_
             duration=None,
         )
 
-    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    monkeypatch.setattr("astrbot_plugin_twitter.core.parse_tweet", fake_parse)
     plugin._downloader = FakeDownloader(tmp_path)
     plugin.settings.send_cover = True
 
@@ -694,7 +694,7 @@ async def test_handle_url_download_failure_falls_back_to_link(plugin_module, plu
     async def fake_parse(*args, **kwargs):
         return _fake_result(cover=None)
 
-    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    monkeypatch.setattr("astrbot_plugin_twitter.core.parse_tweet", fake_parse)
     plugin._downloader = FakeDownloader(tmp_path, fail_urls=("https://dl.snapcdn.app/get?token=AAA",))
     plugin.settings.fallback_link = True
 
@@ -723,7 +723,7 @@ async def test_handle_url_no_placeholder_downloads(plugin_module, plugin, tmp_pa
         result.author_handle = "Fortnite"
         return result
 
-    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    monkeypatch.setattr("astrbot_plugin_twitter.core.parse_tweet", fake_parse)
     downloader = FakeDownloader(tmp_path)
     plugin._downloader = downloader
     plugin.settings.send_audio = True  # 就算开了音频，也不该去下载 "#"
@@ -781,7 +781,7 @@ async def test_send_chain_falls_back(plugin_module, plugin):
         return original(chain)
 
     event.chain_result = flaky  # type: ignore[method-assign]
-    items = [item async for item in plugin.sender._send_chain(event, segments, "https://x.com/a/status/1")]
+    items = [item async for item in plugin.sender.send_chain(event, segments, "https://x.com/a/status/1")]
     assert len(calls) == 2, "第一次带引用失败后应重试"
     assert type(calls[0][0]).__name__ == "Reply" and type(calls[1][0]).__name__ == "Plain"
     assert items and items[-1].chain[0].text == "hi"
@@ -793,7 +793,7 @@ async def test_send_chain_falls_back(plugin_module, plugin):
         raise RuntimeError("全挂了")
 
     event2.chain_result = always_fail  # type: ignore[method-assign]
-    items2 = [item async for item in plugin.sender._send_chain(event2, segments, "https://x.com/a/status/1")]
+    items2 = [item async for item in plugin.sender.send_chain(event2, segments, "https://x.com/a/status/1")]
     final = items2[-1].chain[0].text
     assert "hi" in final, "彻底发不出去时也要保住简介文字"
     assert final.rstrip().endswith("https://x.com/a/status/1")
@@ -842,8 +842,8 @@ async def test_quote_unsupported_platform_is_remembered(plugin_module, plugin):
         return original(chain)
 
     event.chain_result = fail_once  # type: ignore[method-assign]
-    [item async for item in plugin.sender._send_chain(event, segments, "https://x.com/a/status/1")]
-    assert plugin._quote_unsupported, "应当记下这个平台"
+    [item async for item in plugin.sender.send_chain(event, segments, "https://x.com/a/status/1")]
+    assert plugin.sender._quote_unsupported, "应当记下这个平台"
     assert plugin.sender._with_quote(event, segments) is segments, "下次不再加引用"
 
     # 其它平台不受影响
@@ -857,7 +857,7 @@ async def test_handle_url_cover_gets_short_timeout(plugin_module, plugin, tmp_pa
     async def fake_parse(*args, **kwargs):
         return _fake_result()
 
-    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    monkeypatch.setattr("astrbot_plugin_twitter.core.parse_tweet", fake_parse)
     downloader = FakeDownloader(tmp_path)
     plugin._downloader = downloader
     plugin.settings.send_cover = True
@@ -875,7 +875,7 @@ async def test_show_elapsed_can_be_disabled(plugin_module, plugin, tmp_path, mon
     async def fake_parse(*args, **kwargs):
         return _fake_result()
 
-    monkeypatch.setattr(plugin_module, "parse_tweet", fake_parse)
+    monkeypatch.setattr("astrbot_plugin_twitter.core.parse_tweet", fake_parse)
     plugin._downloader = FakeDownloader(tmp_path)
     plugin.settings.show_elapsed = False
 
@@ -925,11 +925,17 @@ async def test_status_shows_session_id_and_hint(plugin_module, plugin):
 # 分段回复：简介单独发、媒体自己带引用
 # --------------------------------------------------------------------------- #
 def _enable_segmented(context, *, enable: bool, only_llm: bool = False) -> None:
-    context.get_config = lambda: {  # type: ignore[method-assign]
-        "platform_settings": {
-            "segmented_reply": {"enable": enable, "only_llm_result": only_llm}
-        }
-    }
+    def get_config(key: str = "", default: Any = None) -> Any:
+        if key == "platform_settings" or key == "":
+            return {
+                "platform_settings": {
+                    "segmented_reply": {"enable": enable, "only_llm_result": only_llm}
+                }
+            }
+        if key == "data_dir":
+            return default or "."
+        return default
+    context.get_config = get_config  # type: ignore[method-assign]
 
 
 def test_split_caption_keeps_first_plain(plugin_module, plugin):
@@ -946,8 +952,7 @@ async def test_segmented_reply_sends_caption_separately(plugin_module, plugin):
     """开了分段回复时：简介单独一条，媒体那条自己带引用（引用不会丢）。"""
     from astrbot.api.message_components import Plain, Video
 
-    _enable_segmented(plugin.context, enable=True)
-    plugin._segmented_cache = None
+    plugin.sender.set_segmented_reply(True)
     event = make_event("x")
     segments = [Plain(text="作者：@a\n"), Video.fromFileSystem(path="/tmp/fake.mp4")]
 
@@ -959,7 +964,7 @@ async def test_segmented_reply_sends_caption_separately(plugin_module, plugin):
         return original(chain)
 
     event.chain_result = record  # type: ignore[method-assign]
-    [item async for item in plugin.sender._send_chain(event, segments, "https://x.com/a/status/1")]
+    [item async for item in plugin.sender.send_chain(event, segments, "https://x.com/a/status/1", segmented_reply=True)]
 
     assert len(chains) == 2, [c for c in chains]
     assert [type(c).__name__ for c in chains[0]] == ["Plain"], "第一条只发简介"
@@ -969,8 +974,7 @@ async def test_segmented_reply_sends_caption_separately(plugin_module, plugin):
 async def test_segmented_reply_off_keeps_single_chain(plugin_module, plugin):
     from astrbot.api.message_components import Plain, Video
 
-    _enable_segmented(plugin.context, enable=False)
-    plugin._segmented_cache = None
+    plugin.sender.set_segmented_reply(False)
     event = make_event("x")
     segments = [Plain(text="作者：@a\n"), Video.fromFileSystem(path="/tmp/fake.mp4")]
 
@@ -982,16 +986,15 @@ async def test_segmented_reply_off_keeps_single_chain(plugin_module, plugin):
         return original(chain)
 
     event.chain_result = record  # type: ignore[method-assign]
-    [item async for item in plugin.sender._send_chain(event, segments, "https://x.com/a/status/1")]
+    [item async for item in plugin.sender.send_chain(event, segments, "https://x.com/a/status/1")]
     assert len(chains) == 1
     assert [type(c).__name__ for c in chains[0]] == ["Reply", "Plain", "Video"]
 
 
 async def test_segmented_only_llm_result_does_not_split(plugin_module, plugin):
     """只对 LLM 结果分段时，插件结果不会被拆开。"""
-    _enable_segmented(plugin.context, enable=True, only_llm=True)
-    plugin._segmented_cache = None
-    assert plugin._segmented_reply_enabled() is False
+    plugin.sender.set_segmented_reply(False)  # only_llm=True means plugin results are not split
+    assert plugin._segmented_reply_enabled is False
 
 
 def test_reply_carries_sender(plugin_module, plugin):
