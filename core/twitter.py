@@ -132,7 +132,6 @@ class TwitterConfig:
     proxy: str | None = None
     timeout: float = 20.0
     retry: int = 2
-    fallback_syndication: bool = True
 
     def headers(self) -> dict[str, str]:
         headers = {

@@ -13,14 +13,14 @@ from pathlib import Path
 
 import pytest
 
-from astrbot_plugin_twitter.core.downloader import DownloadException, Downloader, sniff_kind
-from astrbot_plugin_twitter.core.history import HistoryRecord, HistoryStore
-from astrbot_plugin_twitter.core.syndication import (
+from core.downloader import DownloadException, Downloader, sniff_kind
+from core.history import HistoryRecord, HistoryStore
+from core.syndication import (
     parse_syndication_json,
     syndication_token,
     to_radix36,
 )
-from astrbot_plugin_twitter.core.twitter import (
+from core.twitter import (
     Content,
     ParseException,
     ParseResult,

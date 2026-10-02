@@ -23,7 +23,7 @@ desc: |
   图标：官方 X 标志（本地栅格化生成，见 devtools/make_logo.py）。
   WebUI：插件页面「X 解析历史」可查看/清空历史与统计（成功率、媒体数、流量、常解析作者）。
   LLM Tool：`parse_twitter_link`，可让模型在对话中按需调用。
-version: 1.5.0
+version: 1.6.0
 author: huliaiya
 repo: https://github.com/huliaiya/astr-twitter
 astrbot_version: ">=4.9.2"
