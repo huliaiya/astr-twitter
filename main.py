@@ -289,6 +289,7 @@ class TwitterPlugin(Star):
                 timeout=max(60.0, self.settings.timeout * 3),
                 max_bytes=self.settings.max_video_mb * 1024 * 1024,
                 concurrency=self.settings.download_concurrency,
+                retry=self.settings.retry,
             )
         return self._downloader
 
@@ -654,8 +655,12 @@ class TwitterPlugin(Star):
                     {
                         "subdir": result.tweet_id or "unknown",
                         "filename": item.filename,
-                        # 封面只是锦上添花：给个短超时，别让它拖着视频一起等
-                        **({"timeout": min(settings.timeout, COVER_TIMEOUT)} if item is cover_item else {}),
+                        # 封面只是锦上添花：给个短超时且不重试，别让它拖着视频一起等
+                        **(
+                            {"timeout": min(settings.timeout, COVER_TIMEOUT), "retry": 0}
+                            if item is cover_item
+                            else {}
+                        ),
                     },
                 )
                 for item in batch

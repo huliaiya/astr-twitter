@@ -195,7 +195,7 @@
     "description": "网络代理",
     "type": "string",
     "default": "",
-    "hint": "可选，形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，用于接口请求与媒体下载。"
+    "hint": "可选，形如 http://127.0.0.1:7890 或 socks5://127.0.0.1:1080，用于接口请求与媒体下载。若日志出现「直连 X 媒体服务器失败」，说明当前网络访问不了 pbs.twimg.com / video.twimg.com（被阻断或 DNS 被污染），填写代理即可解决。"
   },
   "timeout": {
     "description": "接口请求超时（秒）",
@@ -204,10 +204,10 @@
     "hint": "解析接口的超时时间，下载超时是它的 3 倍。"
   },
   "retry": {
-    "description": "接口失败重试次数",
+    "description": "失败重试次数",
     "type": "int",
     "default": 2,
-    "hint": "接口不稳定时自动重试，重试间隔递增。"
+    "hint": "解析接口与媒体下载共用：遇到超时、连接被重置、限流或 5xx 时自动重试，间隔按指数递增（上限 8 秒）。封面这类可选内容不重试，避免拖慢正片。"
   },
   "fallback_syndication": {
     "description": "xdown 失败时使用官方后备接口",
