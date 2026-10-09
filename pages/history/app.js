@@ -106,7 +106,9 @@
             return counts[key];
           })
           .map(function (key) {
-            return '<span class="pill">' + key + " ×" + counts[key] + "</span>";
+            // counts 的 key 理论上由插件代码生成（video/image/dynamic/audio），
+            // 但 history.json 可被手工修改，统一走 esc 兜底
+            return '<span class="pill">' + esc(key) + " ×" + Number(counts[key] || 0) + "</span>";
           })
           .join("");
         var detail = record.ok
