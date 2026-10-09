@@ -3,3 +3,314 @@
 [![AstrBot](https://img.shields.io/badge/AstrBot-%3E%3D4.9.2-orange)](https://github.com/AstrBotDevs/AstrBot)
 [![License](https://img.shields.io/badge/License-MIT-green)](./LICENSE)
 
+在 AstrBot 里自动解析 **X / Twitter** 链接，把推文里的**视频、图片、GIF**直接发到会话。
+
+消息里出现 `x.com/.../status/...` 或 `twitter.com/.../status/...` 就会自动触发（默认需要先开启），也可以手动 `/解析 <链接>`。
+解析与发送逻辑抽取自 [`Zhalslar/astrbot_plugin_parser`](https://github.com/Zhalslar/astrbot_plugin_parser)
+的 `core/parsers/twitter.py`，去掉硬耦合后重新组织为独立插件。
+
+---
+
+## ✨ 功能
+
+- **自动解析（按需开启）**：默认不打扰任何会话，管理员发一次 `/开启解析`，之后**该会话**里出现 X 链接就自动解析（含卡片/Json 组件里的链接）
+- **触发方式可选**：`all`（有链接就解析）/ `at`（需要 @机器人）/ `command_only`（只用指令）
+- **手动解析**：`/解析 <链接>`，别名 `/X解析`、`/x解析`、`/tw`（兼容旧名 `/推特解析`）
+- **视频 / 图片 / GIF / 音频**：视频取最高清晰度那一档（通常是 720p）；GIF 以 mp4 发送；接口返回 MP3 时可选择以语音发送
+- **简介带作者与媒体信息**（默认开启）：顶部 `解析耗时 2.3s` + `作者：@Fortnite` + `视频 · 720p · 0:07` + 原文，可分别开关，默认不带表情
+- **封面不串味**：视频/GIF 的缩略图归为封面（不会再当成独立图片重复发）；只有图片的推文不会多发一遍封面；封面优先取 xdown 的缩略图容器，头像/表情（twemoji）/图标一律不当封面
+- **引用/转发**：正文里的 `RT @user:` 自动清洗并标注「🔁 转发自」；可选 `parse_quoted` 再解析一层被引用的原推
+- **失败兜底**：xdown 接口失败时自动改用 Twitter 官方 syndication 接口；媒体下载失败/超限时把直链作为文本发出
+- **并发下载 + 同链接缓存**：多图推文并行下载（并发可配），同一 URL 进程内只下一次
+- **会话 / 全局开关**：`/开启解析`、`/关闭解析` 作用于当前会话；加 `全局` 一次作用于所有会话；状态持久化
+- **解析历史**：`/解析历史` 指令 + WebUI 插件页面「X 解析历史」（成功率、媒体数、流量、常解析作者，可一键清空）
+- **引用回复**（默认开启）：解析结果会「引用」发链接的那条消息，谁发的就引用谁；平台不支持时自动降级
+- **简介一定发得出去**：AstrBot 开了「分段回复」时，会把消息链拆成一个组件一条发、且引用只挂在第一条上
+  —— 插件检测到这种情况会把简介单独发、媒体自己带引用，避免出现「只收到视频，没有作者信息」
+- **防抖**：同一条推文在窗口期内只解析一次，避免刷屏
+- **官方 X 标志图标**：`logo.png` 用官方 X 字形（simple-icons）在本地栅格化生成，零第三方依赖
+- **LLM Tool**：注册 `parse_twitter_link`，模型可在对话中按需调用
+- **多语言**：`.astrbot-plugin/i18n/` 提供 zh-CN / en-US
+
+## 🏷 命名说明
+
+对外文案（插件名、指令说明、WebUI 页面、文案、图标）统一用 **X**：插件在 WebUI 里显示为
+**「X 解析（astr-twitter）」**，页面叫「X 解析历史」。
+
+但**插件 ID 仍然是 `astrbot_plugin_twitter`**（`metadata.yaml` 的 `name`）——它决定安装目录名、
+Python import 路径和插件 Web API 的路由前缀。改掉它会让已安装的老版本变成两个插件、
+页面接口也要跟着变，所以保持不动；仓库名 `astr-twitter` 同理。
+
+## 📦 安装
+
+**方式一：AstrBot 插件市场 / 仓库安装**
+
+在 WebUI 的「插件」页安装本仓库：
+
+```
+https://github.com/huliaiya/astr-twitter
+```
+
+**方式二：手动 clone**
+
+```bash
+cd AstrBot/data/plugins
+git clone https://github.com/huliaiya/astr-twitter
+```
+
+AstrBot 会按 `metadata.yaml` 里的 `name`（`astrbot_plugin_twitter`）作为插件目录名与 import 路径，
+仓库目录名带连字符 `astr-twitter` 不影响加载。安装后在插件页点「重载插件」即可。
+
+依赖只有 `beautifulsoup4`（见 `requirements.txt`），`aiohttp` 由 AstrBot 本体提供。
+
+## 🚀 快速开始
+
+自动解析**默认是关的**（`auto_parse_default: false`），需要先开一次，之后才自动解析：
+
+```
+你（管理员）：/开启解析
+机器人：已开启本会话的X自动解析 ✅
+        之后本会话里发X链接就会自动解析。
+
+你：https://x.com/Fortnite/status/1870484479980052921
+机器人：[推文正文] + [图片/视频]
+```
+
+想让**所有会话**都自动解析（不用一个个群去开）：
+
+```
+/开启解析 全局      # 所有会话自动解析
+/关闭解析 全局      # 所有会话都不自动解析
+/解析状态           # 看当前生效的开关与来源
+/解析历史 5         # 看最近 5 条解析记录（管理员）
+```
+
+不想用指令、希望装完就直接全局自动解析？把配置里的 **`auto_parse_default` 打开**即可。
+任何时候都能用 `/解析 <链接>` 手动解析，不受会话开关影响。
+
+## 🗂 目录结构
+
+```
+astr-twitter/
+├─ main.py                      # 插件入口：Star 子类、事件监听、指令、LLM Tool、插件 Web API
+├─ metadata.yaml                # 插件元数据（name 必须是合法 Python 标识符）
+├─ _conf_schema.json            # WebUI 配置面板（24 项）
+├─ requirements.txt             # 依赖：beautifulsoup4
+├─ logo.png                     # 插件图标（由 devtools/make_logo.py 生成）
+├─ core/
+│  ├─ twitter.py                # 解析核心（xdown 通道，不依赖 AstrBot）
+│  ├─ syndication.py            # 官方 syndication 后备通道（含 JS 一致的 token 算法）
+│  ├─ downloader.py             # 媒体下载：流式限长 + 并发 + 缓存
+│  └─ history.py                # 解析历史存储（JSON，带上限与统计）
+├─ pages/history/               # WebUI 插件页面（历史与统计）
+├─ .astrbot-plugin/i18n/        # zh-CN / en-US 文案
+├─ tests/                       # pytest：离线 + 联网 + 真实 AstrBot 集成
+└─ devtools/                    # 开发工具：Python CLI、Node 实现、离线 fixture、图标生成、页面自检
+```
+
+## 💬 指令
+
+| 指令 | 权限 | 说明 |
+| --- | --- | --- |
+| `/解析 <链接>` | 所有人 | 手动解析，任何时候都可用（别名：`/X解析`、`/tw`、`/x解析`） |
+| `/开启解析` | 管理员 | 开启**当前会话**的自动解析，之后本会话发链接就会自动解析 |
+| `/开启解析 全局` | 管理员 | 开启**所有会话**的自动解析 |
+| `/关闭解析` | 管理员 | 关闭**当前会话**的自动解析 |
+| `/关闭解析 全局` | 管理员 | 关闭**所有会话**的自动解析 |
+| `/解析状态` | 所有人 | 查看总开关、触发方式、全局开关、默认策略、本会话状态及生效来源 |
+| `/解析历史 [条数]` | 管理员 | 查看最近的解析记录（含失败原因） |
+
+开关优先级：**本会话显式设置 > 全局开关 > 配置里的 `auto_parse_default`**。
+所以「全局打开了，但某个群用 `/关闭解析` 单独关掉」是生效的。
+
+## ⚙️ 配置（WebUI → 插件 → X解析）
+
+| 配置项 | 默认 | 说明 |
+| --- | --- | --- |
+| `enabled` | `true` | 插件总开关 |
+| `auto_parse` | `true` | 自动解析功能总开关（关闭后所有会话都不自动解析，手动 `/解析` 仍可用） |
+| `auto_parse_default` | `false` | 新会话默认是否自动解析。**建议保持关闭**，用 `/开启解析` 按需开 |
+| `trigger_mode` | `all` | `all` 有链接就解析 / `at` 需要 @机器人 / `command_only` 只用指令 |
+| `interrupt_event` | `true` | 解析后终止事件传播，避免同一条消息再触发一次 LLM 回复 |
+| `notify_error` | `false` | 失败时是否回复原因（默认只写日志，不打扰群聊） |
+| `max_links` | `3` | 单条消息最多解析链接数 |
+| `max_media` | `9` | 单条推文最多发送媒体数 |
+| `max_title_chars` | `300` | 正文最大长度，`0` 不限制 |
+| `send_title` | `true` | 是否附带推文正文 |
+| `send_author` | `true` | 简介里带作者：从链接取 `@handle`（`x.com/Fortnite/status/1` → `@Fortnite`） |
+| `send_media_info` | `true` | 简介里带媒体信息：`视频 · 720p · 0:07` / `图片 ×3` |
+| `send_link` | `false` | 简介里带原推链接 |
+| `caption_emoji` | `false` | 媒体类型前加 🎬/🖼️/🎞️/🎵（默认纯文字） |
+| `quote_reply` | `true` | 解析结果引用发链接的那条消息；平台/版本不支持时自动降级为普通发送 |
+| `show_elapsed` | `true` | 简介顶部显示解析耗时（解析 + 下载的总时间） |
+| `hint_when_disabled` | `false` | 会话里出现 X 链接但没开自动解析时，回一句「发 /开启解析」提示（默认关闭，避免刷屏） |
+| `send_cover` | `false` | 是否额外发送封面（封面直链是 `pbs.twimg.com`） |
+| `send_audio` | `false` | 接口返回 MP3 时是否以语音消息发送 |
+| `parse_quoted` | `false` | 是否再解析一层被引用/转发的原推 |
+| `keep_files` | `false` | 是否保留已下载文件（默认发送后删除） |
+| `fallback_link` | `true` | 下载失败/超限时把媒体直链作为文本发出 |
+| `max_video_mb` | `100` | 媒体大小上限（流式下载，超限立即中断） |
+| `download_concurrency` | `3` | 多图并行下载并发数（1-8） |
+| `debounce_seconds` | `300` | 同一推文防抖窗口，`0` 关闭 |
+| `history_enabled` | `true` | 是否记录解析历史 |
+| `history_size` | `200` | 历史条数上限（10-2000） |
+| `api_endpoint` | `https://xdown.app/api/ajaxSearch` | 主解析接口 |
+| `api_origin` | `https://xdown.app` | 接口 Origin/Referer（有校验，一般不改） |
+| `cookie` | 空 | **xdown.app 的** Cookie（不是X账号凭证），风控时才需要填 |
+| `proxy` | 空 | `http://127.0.0.1:7890` 之类，用于接口请求与媒体下载 |
+| `timeout` / `retry` | `20.0` / `2` | 接口超时与重试次数 |
+| `fallback_syndication` | `true` | xdown 失败时是否改用官方 syndication 后备接口 |
+| `parse_cache_ttl` | `300` | 解析结果进程内 TTL 缓存（秒）；同一条推文在群聊里被反复 @ 时不重复请求 xdown 接口。`0` 关闭 |
+
+## 💬 消息长什么样
+
+以一条视频推文为例，开启自动解析后机器人发的是：
+
+```
+作者：@Fortnite
+视频 · 720p · 0:07
+Don’t miss the (Lucky) Landing.Keep your eyes peeled. OG Season 3 launches tomorrow.
+[视频（封面：该推文的缩略图）]
+```
+
+- 机器人会**引用**发链接的那条消息（`quote_reply` 关闭则不引用）；
+- 简介最上面是**解析耗时**（`show_elapsed` 可关）；
+- 作者来自链接里的 handle，无需额外请求；
+- `720p` 与 `0:07` 来自 xdown 返回的分辨率与时长；
+- 图片推文是 `图片 ×3` 这种形式，**不会再重复发一遍封面**；
+- 视频/GIF 的缩略图默认不单独发（想发就打开 `send_cover`，它会排在视频前面，像预览图）；
+- 想让简介更干净，可以关掉 `send_title`（只留作者+媒体信息），或关掉 `send_author`。
+
+## 🖥 WebUI 插件页面
+
+安装后，AstrBot WebUI 的插件页会多出一个「**X解析历史**」页面（`pages/history/`）：
+
+- 顶部统计卡：总解析 / 成功 / 失败 / 成功率 / 视频 / 图片 / GIF / 流量
+- 列表：时间、成功与否、媒体类型与数量、推文链接与标题、文件大小；失败项直接显示原因
+- 常解析作者 Top10、当前接口与代理状态
+- 「清空」按钮一键清除历史
+
+页面通过官方桥接 SDK（`window.AstrBotPluginPage.apiGet/apiPost`）调用插件自己注册的 Web API：
+`GET /api/v1/plugins/extensions/astrbot_plugin_twitter/history`、
+`POST .../history/clear`。**AstrBot 版本较老、没有插件 Web API 时插件会自动跳过注册**，
+页面打不开但不影响解析功能（配置项 `history_enabled` 也可整体关闭历史）。
+
+## 🔧 工作原理
+
+```
+消息事件
+  └─ 收集文本（message_str + Json 卡片 + url 字段）
+      └─ 正则匹配 status 链接（x.com / twitter.com，与原插件正则一致）
+          └─ 机器人自身消息过滤
+              └─ 触发方式：trigger_mode（all / at / command_only）
+                  └─ 开关判定：本会话显式开关 > 全局开关 > 默认策略（默认关）
+                      └─ 防抖
+                          └─ POST xdown.app/api/ajaxSearch  (q=<url>&lang=zh-cn)
+                              ├─ 成功：解析返回 HTML
+                              │   第一个 <img> → 封面；a.tw-button-dl / a.abutton →
+                              │   视频 / 图片 / gif / MP3；第一个 <h3> → 正文（清洗 RT 前缀）
+                              └─ 失败且开了 fallback_syndication：
+                                  GET cdn.syndication.twimg.com/tweet-result?id=..&token=..
+                                  → 解析 mediaDetails / video_info.variants
+                                  └─ 并发下载媒体（流式 + 限长 + 缓存，落地
+                                     data/plugin_data/<plugin>/twitter/<推文ID>/）
+                                      └─ 写解析历史（history.json）
+                                          └─ yield event.chain_result([...Video/Image/Record...])
+```
+
+## 🧪 测试
+
+```bash
+# 离线（URL 匹配、HTML fixture、文件头、下载器、历史、参数、页面接口…）
+ASTR_TWITTER_SKIP_LIVE=1 pytest
+
+# 全部（含真实解析、真实下载、真实 AstrBot 集成）
+pytest
+```
+
+本仓库的测试情况（AstrBot 4.28.1 + Python 3.12，实测）：
+
+```
+162 passed in 55.24s
+```
+
+- **离线（140+ 项）**：
+  - URL 匹配 10 项（`www.` / `mobile.` / `x.com/i/web/status/` / 夹带参数 / 反例）、3 份 xdown HTML fixture 断言
+  - 正文清洗（`RT @user:` → 转发标记、t.co 去链）、截断、引用链接识别、音频按钮解析
+  - **syndication token 与本机 Node（V8 `toString(36)`）的 8 组结果逐一比对**，含边界 ID
+  - syndication JSON → ParseResult 映射（最高码率 mp4、忽略 m3u8、gif、已带参数的图片 URL、空体报错）
+  - 下载器：落盘与类型嗅探、**超限中断不留残文件**、并发 `download_many` 的单点失败隔离、同 URL 缓存命中
+  - **URL 清洗**：`#`（转换为 MP3 的占位按钮）、`/`（下载更多视频）、相对路径、`javascript:` 一律拒绝
+    —— 这正是线上 `媒体下载失败：InvalidUrlClientError` 的根因
+  - **中转链解码**：从 `dl.snapcdn.app/get?token=<JWT>` 解出原始地址与文件名，用于识别封面、取分辨率、起文件名
+  - **封面判定**：视频/GIF 的缩略图归封面不再当图片；图片推文不重复发封面；HTML 里先出现表情/头像时封面不被抢走
+  - **简介拼接**：「作者：@handle」「视频 · 720p · 0:07」「图片 ×3」「转发」、关闭某项、截断、无作者时不硬塞
+  - **引用回复**：链首插入 `Reply(id=触发消息, sender_id=...)`、开关关闭时不插入、拿不到消息 ID 时跳过、
+    带引用发送失败自动退回不带引用（并记住该平台不再重试）、彻底失败退回「简介 + 链接」
+  - **分段回复适配**：检测到 AstrBot 开启分段回复时简介单独发、媒体自己带引用；关闭时仍是一条链；
+    `only_llm_result` 为真时不拆
+  - **解析耗时**：`format_elapsed` 的秒/分钟格式、简介首行位置、`show_elapsed=false` 时不出现
+  - **封面超时**：封面下载必须带 `COVER_TIMEOUT` 短超时，普通媒体不受限
+  - **未开启提示**：默认静默只记日志，开了 `hint_when_disabled` 才回话；`/解析状态` 里带会话 ID 与开启方式
+  - **图标**：`logo.png` 是 256×256 合法 PNG 且前景/底色比例符合官方 X 字形几何
+  - 历史：上限淘汰、统计（成功率/媒体计数/常解析作者）、损坏文件容错、清空
+  - 插件：开关优先级、触发方式 `at`/`command_only`、`/解析历史`、插件 Web API 注册与响应体（用
+    真实 `PluginRequest` 绑定上下文调用）、**按 AstrBot 真实导入路径 `data.plugins.astrbot_plugin_twitter.main` 加载**的保真测试
+  - **解析缓存**（`tests/test_cache.py`）：TTL 命中 / 未命中 / 并发去重（5 并发 1 真实请求）/
+    失败释放标记 / 容量 200 条上限淘汰 / 关闭缓存不写入 / 清空返回计数
+- **联网**：真实推文的视频 / 单图 / 多图 / GIF / `twitter.com` 域名解析；不存在的推文正确抛 `ParseException`
+- **集成**：用真实 AstrBot 的事件与消息组件跑完整链路（消息 → 解析 → 下载 → `chain_result`），
+  断言消息链里出现 `Image` / `Video` 组件、文件真实存在且体积合理、`event.stop_event()` 被调用；
+  覆盖「先 `/开启解析` 再发链接自动解析」「@机器人 触发 + 写入历史」「引用原推跟随」等场景；
+  并断言 7 个 handler 与 `parse_twitter_link` 这个 LLM Tool 已成功注册；
+  以及用假下载器断言简介内容、封面排序与 `cover` 透传、图片推文不重复发封面、
+  下载失败回落直链、**转换按钮的 `#` 地址永远不进下载队列**；
+  自动解析与手动 `/解析` 的消息链都以 `Reply` 开头（引用触发消息）。
+
+命令行调试（不需要 AstrBot）：
+
+```bash
+python devtools/twitter_cli.py https://x.com/Fortnite/status/1870484479980052921
+python devtools/twitter_cli.py "看这个 https://x.com/Dithmenos9/status/1966798448499286345" --download out
+python devtools/make_logo.py          # 重新生成 logo.png
+node devtools/test-page.mjs           # 用 DOM 桩 + 真实桥接 SDK 跑一遍 WebUI 页面逻辑
+```
+
+## 🩺 排查「群里发链接不解析」
+
+自动解析默认是**按会话开启**的（避免机器人到处插话）。发一条 `/解析状态`，它会告诉你：
+
+- 本会话是否在自动解析中，以及来源（本会话 / 全局开关 / 默认策略）
+- **本会话 ID**（`unified_msg_origin`）——Telegram 话题群是 `<chat_id>#<thread_id>`，
+  话题之间算**不同会话**，在 A 话题里 `/开启解析` 不会影响 B 话题
+- 触发方式：设成 `at` 就必须 @机器人，`command_only` 则只能手动 `/解析`
+
+没开启时会话里出现链接会记一条 INFO 日志（关键词 `发现 X 链接但本会话未开启自动解析`），
+把 `hint_when_disabled` 打开还能让机器人直接回一句提示。
+
+## ⚠️ 已知限制
+
+1. **主接口依赖第三方 `xdown.app`**（原插件同样依赖）。接口改版或限流时需要更新 `api_endpoint`，
+   或依赖 syndication 后备通道。
+2. **syndication 后备接口的联网行为未在本机验证**：本开发环境中 `cdn.syndication.twimg.com`
+   与 `pbs.twimg.com` 同属被墙的 Twitter CDN，无法连通，所以后备通道只有**离线单测**
+   （token 算法、JSON 映射）与实际环境验证的空白；它只在主接口失败时启用，失败也只是继续报错。
+3. **`pbs.twimg.com` 直链在部分服务器不可达**。媒体经 `dl.snapcdn.app` 中转时正常，
+   但 `send_cover` 与 syndication 直链可能失败——日志里有提示，可用 `proxy` 解决。
+4. **GIF 以 mp4 形式发送**（接口给的就是 mp4 容器）。
+5. **音频需要接口返回 MP3 按钮**；当前 xdown 对普通视频推文只给 MP4，所以 `send_audio`
+   多数情况下不会触发（离线用例用构造的 HTML 覆盖了这条分支）。
+6. 视频类消息并非所有平台都能发送；失败时会降级为发送原链接。
+7. 简介里的作者只能从链接里取到 `@handle`；`x.com/i/web/status/...` 这种没有用户名的链接
+   会省略作者行（昵称/时间/点赞数需要官方接口，暂未接入）。
+8. 多清晰度只取下载列表里的第一档（与原插件一致，xdown 一般把最高清放第一个）。
+9. `logo.png` 由脚本程序化生成（纯标准库），风格朴素，可按需替换同名文件。
+
+## 📄 来源与致谢
+
+- 解析逻辑抽取自 [`Zhalslar/astrbot_plugin_parser`](https://github.com/Zhalslar/astrbot_plugin_parser)（MIT）
+- 该项目的核心又来自 [`fllesser/nonebot-plugin-parser`](https://github.com/fllesser/nonebot-plugin-parser)
+- 测试用的真实推文链接取自 `nonebot-plugin-parser` 的测试套件
+- syndication token 算法参考X前端 / `react-tweet` 的公开实现
+
+本项目以 MIT 协议发布，遵循原项目的许可与署名要求。
