@@ -108,6 +108,7 @@ class Settings:
     proxy: str = ""
     timeout: float = 20.0
     retry: int = 2
+    parse_cache_ttl: float = 300.0  # 进程内解析缓存 TTL（秒）；<=0 关闭
     fallback_syndication: bool = True
 
     @classmethod
@@ -173,6 +174,7 @@ class Settings:
             proxy=str(get("proxy", "") or ""),
             timeout=max(3.0, as_float("timeout", 20.0)),
             retry=max(0, as_int("retry", 2)),
+            parse_cache_ttl=max(0.0, as_float("parse_cache_ttl", 300.0)),
             fallback_syndication=as_bool("fallback_syndication", True),
         )
 
@@ -184,6 +186,7 @@ class Settings:
             proxy=self.proxy or None,
             timeout=self.timeout,
             retry=self.retry,
+            parse_cache_ttl=float(self.parse_cache_ttl or 0),
         )
 
 
@@ -725,7 +728,7 @@ class TwitterPlugin(Star):
 
         # 关键诊断：把即将发送的组件类型与简介首行记下来，排查 TG 私聊丢字段
         first_line = caption.split("\n")[0] if caption else "(无简介)"
-        logger.info(
+        logger.debug(
             f"[{PLUGIN_NAME}] 准备发送：平台={self._platform_key(event) or 'unknown'} "
             f"组件={[type(c).__name__ for c in segments]} 首行={first_line!r}"
         )

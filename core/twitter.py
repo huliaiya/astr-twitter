@@ -18,6 +18,7 @@ import asyncio
 import base64
 import json
 import re
+import time
 import urllib.parse
 from dataclasses import asdict, dataclass, field
 from itertools import chain
@@ -28,6 +29,27 @@ from bs4 import BeautifulSoup, Tag
 
 DEFAULT_ENDPOINT = "https://xdown.app/api/ajaxSearch"
 DEFAULT_ORIGIN = "https://xdown.app"
+
+# 进程内解析结果缓存：同一条推文在防抖窗口内被多次 @ 或转发时，
+# 避免重复请求 xdown 接口（限流与风控的根源之一）。
+_parse_cache: dict[str, tuple[float, ParseResult]] = {}
+_parse_cache_lock: asyncio.Lock | None = None
+# 在途请求表：并发命中同一 URL 时只放行一个真实请求，其余等待复用结果
+_inflight_cache: dict[str, "asyncio.Future[ParseResult]"] = {}
+
+
+def _get_cache_lock() -> asyncio.Lock:
+    global _parse_cache_lock
+    if _parse_cache_lock is None:
+        _parse_cache_lock = asyncio.Lock()
+    return _parse_cache_lock
+
+
+def clear_parse_cache() -> int:
+    """清空解析缓存，返回清掉的条数（测试与长驻进程内存保护用）。"""
+    count = len(_parse_cache)
+    _parse_cache.clear()
+    return count
 
 USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 "
@@ -132,6 +154,7 @@ class TwitterConfig:
     proxy: str | None = None
     timeout: float = 20.0
     retry: int = 2
+    parse_cache_ttl: float = 300.0  # 进程内解析缓存 TTL；<=0 关闭
 
     def headers(self) -> dict[str, str]:
         headers = {
@@ -595,6 +618,73 @@ async def parse_tweet(
     _, searched = matched
     url = f"https://{searched.group(0)}"
 
+    # TTL 缓存（秒）：推文发布后内容基本不变，
+    # 缓存命中可省掉一次接口调用 + 一次 HTML 解析 + 一次媒体中转链签发。
+    # 并发同一 URL 时只放行一个真实请求，其余等待者直接复用结果。
+    ttl = config.parse_cache_ttl
+    is_owner = False
+    inflight: asyncio.Future | None = None
+    if ttl > 0:
+        lock = _get_cache_lock()
+        async with lock:
+            entry = _parse_cache.get(url)
+            if entry is not None:
+                ts, cached = entry
+                if time.monotonic() - ts < ttl:
+                    return cached
+                _parse_cache.pop(url, None)
+            inflight = _inflight_cache.get(url)
+            if inflight is None:
+                # 本任务成为在途请求的 owner
+                inflight = asyncio.get_running_loop().create_future()
+                _inflight_cache[url] = inflight
+                is_owner = True
+    if is_owner:
+        # owner 路径：执行真实请求；成功写缓存并唤醒等待者，失败则让等待者原样抛出
+        try:
+            result = await _parse_single(url, input_text, config, session, fallback)
+        except Exception as e:
+            _inflight_cache.pop(url, None)
+            inflight.set_exception(e)
+            # 若没有任何等待者 retrieve 这个异常，Python 会在 GC 时打印
+            # "Future exception was never retrieved"；取一次 exception() 消除该告警。
+            # 有等待者时，等待者 await 到的是同一个异常，不受影响。
+            inflight.exception()
+            raise
+        # 写入缓存（限大小，避免长驻进程内存膨胀）
+        lock = _get_cache_lock()
+        async with lock:
+            if len(_parse_cache) >= 200:
+                # 简单按时间戳淘汰最旧的一批
+                oldest = sorted(_parse_cache.items(), key=lambda kv: kv[1][0])[:50]
+                for key, _ in oldest:
+                    _parse_cache.pop(key, None)
+            _parse_cache[url] = (time.monotonic(), result)
+        # 完成在途 future，唤醒所有并发等待者
+        inflight.set_result(result)
+        _inflight_cache.pop(url, None)
+        return result
+
+    # 并发等待者：等待首个真实请求的结果，省掉重复的接口调用与限流风险
+    if inflight is not None:
+        try:
+            return await inflight
+        except Exception:
+            # owner 失败已把标记清掉；等待者原样抛出
+            raise
+
+    # 未启用缓存/在途去重（ttl<=0）：直接执行
+    return await _parse_single(url, input_text, config, session, fallback)
+
+
+async def _parse_single(
+    url: str,
+    input_text: str,
+    config: TwitterConfig,
+    session: aiohttp.ClientSession | None,
+    fallback: bool,
+) -> ParseResult:
+    """单次真实解析（owner 调用；不带缓存/在途逻辑，保证并发只放行一份请求）。"""
     own_session = session is None
     if own_session:
         session = aiohttp.ClientSession(

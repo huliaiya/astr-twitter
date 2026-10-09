@@ -39,6 +39,16 @@
     return (bytes / 1024 / 1024 / 1024).toFixed(2) + " GB";
   }
 
+  // 页面里所有插入 DOM 的字符串都走这里，避免 XSS 或属性引号问题
+  function esc(value) {
+    return String(value == null ? "" : value)
+      .replace(/&/g, "&amp;")
+      .replace(/</g, "&lt;")
+      .replace(/>/g, "&gt;")
+      .replace(/"/g, "&quot;")
+      .replace(/'/g, "&#39;");
+  }
+
   function renderStats(stats) {
     var counts = stats.counts || {};
     var cards = [
@@ -55,11 +65,11 @@
       .map(function (item) {
         return (
           '<div class="stat-card"><div class="k">' +
-          item.k +
+          esc(item.k) +
           '</div><div class="v' +
           (item.cls ? " " + item.cls : "") +
           '">' +
-          item.v +
+          esc(item.v) +
           "</div></div>"
         );
       })
@@ -101,26 +111,26 @@
           .join("");
         var detail = record.ok
           ? '<div class="pills">' + (pills || "—") + "</div>"
-          : '<span class="bad">' + (record.error || t("pages.history.failed", "失败")) + "</span>";
-        var title = (record.title || "").replace(/\n/g, " ").slice(0, 200);
+          : '<span class="bad">' + esc(record.error || t("pages.history.failed", "失败")) + "</span>";
+        var title = esc((record.title || "").replace(/\n/g, " ").slice(0, 200));
         var statusCls = record.ok ? "ok" : "bad";
         var statusIcon = record.ok ? "✅" : "❌";
 
         return (
-          '<div class="record-card" data-id="' + record.url + '">' +
+          '<div class="record-card" data-id="' + esc(record.url) + '">' +
           '<div class="record-header" onclick="toggleCard(this)">' +
           '<div class="status-badge ' + statusCls + '">' + statusIcon + '</div>' +
           '<div class="record-main">' +
-          '<div class="record-time">' + (record.time || "") + '</div>' +
-          '<div class="record-url"><a href="' + record.url + '" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">' + record.url + '</a></div>' +
+          '<div class="record-time">' + esc(record.time || "") + '</div>' +
+          '<div class="record-url"><a href="' + esc(record.url) + '" target="_blank" rel="noreferrer" onclick="event.stopPropagation()">' + esc(record.url) + '</a></div>' +
           '</div>' +
           '<span class="expand-icon">▼</span>' +
           '</div>' +
           '<div class="record-details">' +
           (detail ? '<div class="detail-row"><span class="detail-label">媒体</span><div class="detail-value">' + detail + '</div></div>' : '') +
           (title ? '<div class="detail-row"><span class="detail-label">标题</span><div class="detail-value">' + title + '</div></div>' : '') +
-          '<div class="detail-row"><span class="detail-label">大小</span><div class="detail-value">' + (record.bytes ? humanSize(record.bytes) : "—") + '</div></div>' +
-          '<div class="detail-row"><span class="detail-label">来源</span><div class="detail-value">' + (record.source || "—") + '</div></div>' +
+          '<div class="detail-row"><span class="detail-label">大小</span><div class="detail-value">' + esc(record.bytes ? humanSize(record.bytes) : "—") + '</div></div>' +
+          '<div class="detail-row"><span class="detail-label">来源</span><div class="detail-value">' + esc(record.source || "—") + '</div></div>' +
           '</div>' +
           '</div>'
         );

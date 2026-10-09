@@ -209,6 +209,12 @@
     "default": 2,
     "hint": "解析接口与媒体下载共用：遇到超时、连接被重置、限流或 5xx 时自动重试，间隔按指数递增（上限 8 秒）。封面这类可选内容不重试，避免拖慢正片。"
   },
+  "parse_cache_ttl": {
+    "description": "解析结果缓存时长（秒）",
+    "type": "float",
+    "default": 300.0,
+    "hint": "同一条推文在缓存窗口内被重复 @ 或转发时，直接复用上次解析结果，不重复请求 xdown 接口。设为 0 可关闭。"
+  },
   "fallback_syndication": {
     "description": "xdown 失败时使用官方后备接口",
     "type": "bool",
